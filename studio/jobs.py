@@ -942,7 +942,7 @@ def _run_job(job):
     del audio
     clips = job["clips"]
     job["ai"] = {"model": model, "tokens": tokens, "log": notes[-5:],
-                 "note": "The AI was unavailable, so clips were picked by loudness only." if clips and not model else ""}
+                 "note": "AI is required: no clips were made because the AI was unavailable." if not model else ""}
     stage = "Done" if clips else "Done, but nothing clip-worthy was found"
     _set(job, status="done", stage=stage, progress=1.0, took=round(time.time() - t0))
     try:

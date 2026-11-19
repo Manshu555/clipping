@@ -254,22 +254,8 @@ def _snap(clip, lines, words, min_len, max_len, duration):
 
 
 def fallback_by_loudness(db, words, n, max_len, duration):
-    """No AI available: take the loudest stretches that contain speech."""
-    z = loud_zscore(db)
-    picks, order = [], np.argsort(-z)
-    for sec in order:
-        s = max(0.0, float(sec) - max_len * 0.6)
-        e = min(duration, s + max_len)
-        if any(not (e <= p["start"] or s >= p["end"]) for p in picks):
-            continue
-        if not any(s <= w["s"] <= e for w in words):
-            continue
-        picks.append({"start": s, "end": e, "score": 50, "category": "other", "hook": "WAIT FOR IT",
-                      "title": "Loud moment", "description": "", "hashtags": [], "highlight_words": [],
-                      "reason": "Picked by loudness because the AI was unavailable."})
-        if len(picks) >= n:
-            break
-    return picks
+    """Disabled: PeakCut will only generate clips when AI is active."""
+    return []
 
 
 def _game_rules(game):
@@ -309,8 +295,8 @@ def find_clips(words, db, duration, title="", uploader="", max_clips=6, min_len=
             log(f"AI window {a:.0f}-{b:.0f}s failed: {e}")
     note = ""
     if not used_model:
-        found = fallback_by_loudness(db, words, max_clips, max_len, duration)
-        note = "The AI was unavailable, so clips were picked by loudness only."
+        found = []
+        note = "No clips generated: AI is required and was unavailable."
     clips = []
     for c in sorted(found, key=lambda c: -_num(c.get("score"))):
         s, e = _snap(c, lines, words, min_len, max_len, duration)
