@@ -58,9 +58,9 @@ Rules:
 - Skip weak moments. Fewer strong clips beat many weak ones. Return [] if nothing is worth clipping.
 - score: 0-100, how likely a stranger keeps watching. Be honest; most clips are 50-80.
 - hook: at most 5 words, ALL CAPS, shown as big text on the video. Curiosity, but true to what happens.
-- title: at most 70 characters, for the post.
-- description: one or two sentences.
-- hashtags: 5 tags without the # sign.
+- title: at most 60 characters, punchy few words for the post.
+- description: one short sentence.
+- hashtags: 5 to 6 catchy, viral hashtags without the # sign, specific to what happens in this clip, the streamer, and the game (e.g. CarryMinati, GTA6, GamingClips, FunnyMoments, GTA6Fails). Keep them trending and relevant.
 - highlight_words: 3 to 6 single words spoken in the clip that carry the punch.
 - Write hook, title, description, hashtags and highlight_words in English. If the video is in Hindi or Urdu,
   you may write them the way people type Hindi and Urdu in Roman letters (Hinglish: "yaar ye kya hai"), never

@@ -25,7 +25,15 @@ _WORDS = {"में": "mein", "मैं": "main", "हैं": "hain", "है
           "भी": "bhi", "ही": "hi", "की": "ki", "जी": "ji", "तो": "to", "हाँ": "haan", "हां": "haan", "यहाँ": "yahan",
           "यहां": "yahan", "वहाँ": "wahan", "वहां": "wahan", "कहाँ": "kahan", "कहां": "kahan", "थी": "thi",
           "रही": "rahi", "कभी": "kabhi", "अभी": "abhi", "सभी": "sabhi", "भाई": "bhai", "मुझे": "mujhe",
-          "तुम": "tum", "हम": "hum", "आप": "aap", "बहुत": "bahut", "अच्छा": "accha", "ठीक": "theek", "लिए": "liye"}
+          "तुम": "tum", "हम": "hum", "आप": "aap", "बहुत": "bahut", "अच्छा": "accha", "ठीक": "theek", "लिए": "liye",
+          "टैक्सी": "taxi", "गाड़ी": "gaadi", "गाड़ी": "gaadi", "कार": "car", "गेम": "game", "पुलिस": "police",
+          "ठुक": "thuk", "ठोक": "thok", "लगा": "laga", "लगाई": "lagai", "लगाया": "lagaya", "लगी": "lagi",
+          "गया": "gaya", "गई": "gayi", "गए": "gaye", "रहा": "raha", "रहे": "rahe", "कर": "kar", "करो": "karo",
+          "किया": "kiya", "देख": "dekh", "देखो": "dekho", "देखा": "dekha", "चल": "chal", "चलो": "chalo",
+          "यार": "yaar", "अरे": "arey", "ब्रो": "bro", "बंदा": "banda", "बंदे": "bande", "साला": "saala",
+          "मजा": "maza", "मज़ा": "maza", "पैसा": "paisa", "पैसे": "paise", "कसम": "kasam", "पता": "pata",
+          "बोला": "bola", "बोली": "boli", "बोल": "bol", "मार": "maar", "मारा": "maara", "रूको": "ruko",
+          "रुको": "ruko", "सुनो": "suno", "जा": "jaa", "जाओ": "jao", "आ": "aa", "आओ": "aao"}
 DEVANAGARI = re.compile(r"[ऀ-ॿ]")
 OTHER_SCRIPT = re.compile(r"[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]")   # Urdu / Arabic letters
 
@@ -87,6 +95,8 @@ def _korean(run: str) -> str:
 
 
 def _word(w: str) -> str:
+    import unicodedata
+    w = unicodedata.normalize("NFD", w)
     if w in _WORDS:
         return _WORDS[w]
     # One unit per letter: [roman consonant or vowel, its vowel or None (None = a consonant with no vowel), is_cons]
@@ -239,8 +249,10 @@ _URDU_RUN = r"[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]+"
 
 def to_roman(text: str) -> str:
     """Every Hindi and Urdu word in the text spelled in Roman letters. Anything else is left exactly as it is."""
+    import unicodedata
     text = text or ""
     if DEVANAGARI.search(text):
+        text = unicodedata.normalize("NFD", text)
         text = re.sub(_HINDI_RUN, lambda m: _word(m.group(0)), text)
     if OTHER_SCRIPT.search(text):
         text = text.replace("،", ",").replace("؟", "?").replace("۔", ".")

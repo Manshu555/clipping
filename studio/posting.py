@@ -108,8 +108,16 @@ def on_clip_ready(job, clip):
 
 
 def _caption(clip, creator):
-    tags = " ".join("#" + h for h in clip.get("hashtags", []))
-    return "\n\n".join(x for x in (clip.get("description", ""), tags, creator.get("post_footer", "")) if x)
+    import re
+    tags = " ".join("#" + re.sub(r"\W", "", str(h)) for h in clip.get("hashtags", []) if h)
+    title = (clip.get("title") or clip.get("hook") or "Clip").strip()
+    footer = creator.get("post_footer", "").strip() if creator else ""
+    parts = [title]
+    if tags:
+        parts.append(tags)
+    if footer:
+        parts.append(footer)
+    return "\n\n".join(parts)
 
 
 def _post(p):
@@ -131,9 +139,9 @@ def _post(p):
         elif acc["platform"] == "youtube":
             rid, url = accounts.youtube_upload(acc, path, title, cap + "\n\n#Shorts", clip.get("hashtags", []), creator["privacy"])
         elif acc["platform"] == "instagram":
-            rid, url = accounts.instagram_upload(acc, path, f"{title}\n\n{cap}", job["id"])
+            rid, url = accounts.instagram_upload(acc, path, cap, job["id"])
         elif acc["platform"] == "tiktok":
-            rid, url = accounts.tiktok_upload(acc, path, f"{title}\n\n{cap}", creator["privacy"])
+            rid, url = accounts.tiktok_upload(acc, path, cap, creator["privacy"])
         else:
             raise RuntimeError("That kind of account is no longer supported.")
         p.update(status="posted", posted_at=time.time(), remote_id=rid, url=url, error=None)
