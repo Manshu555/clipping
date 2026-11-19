@@ -88,7 +88,7 @@ def _apps_saved() -> dict:
         at = 0
     if _apps_seen["at"] != at:
         try:
-            data = json.loads(f.read_text(encoding="utf-8")) if at else {}
+            data = json.loads(f.read_text(encoding="utf-8-sig")) if at else {}
         except (OSError, ValueError):
             data = {}
         _apps_seen.update(at=at, data=data if isinstance(data, dict) else {})

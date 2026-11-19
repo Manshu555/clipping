@@ -413,6 +413,8 @@ def render_one(job, clip, words):
                 clip["facecam"] = face
                 clip["layout"] = render.face_layout(clip.get("layout", "blur"), face, keep)
         local = dict(clip, start=clip["start"] - off, end=clip["end"] - off, hook=roman.to_roman(clip.get("hook") or ""))
+        if local["end"] <= local["start"] + 0.5:
+            raise ValueError(f"Clip timing is invalid ({local['start']:.2f}s to {local['end']:.2f}s): recording was interrupted or ended early.")
         near = _caption_words(job, clip, words, off) if clip.get("captions", True) else []
         out = render.render_clip(src, d / "clips", clip["id"], local, near, job["width"], job["height"])
         try:
