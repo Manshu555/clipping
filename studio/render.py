@@ -295,6 +295,7 @@ def _hook_y(layout, hook_y, facecam=None):
     return hook_y
 
 
+_nvenc_ok = None
 _qsv_ok = None
 RENDER_SECONDS = 600      # one clip's video encode; far beyond normal, so a frozen encoder is stopped, not waited on
 
@@ -330,7 +331,7 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
 
 
 def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str, face=None) -> dict:
-    global _qsv_ok
+    global _nvenc_ok, _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
     (work / "f").mkdir()
     for f in config.FONTS_DIR.glob("*.ttf"):
@@ -342,6 +343,8 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart",
             "-avoid_negative_ts", "make_zero", "-pix_fmt"]
     encoders = []
+    if _nvenc_ok is not False:
+        encoders.append(("nvenc", ["yuv420p", "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "21"]))
     if _qsv_ok is not False:
         encoders.append(("qsv", ["nv12", "-c:v", "h264_qsv", "-global_quality", "23", "-preset", "fast"]))
     encoders.append(("x264", ["yuv420p", "-c:v", "libx264", "-crf", "21", "-preset", "veryfast"]))
@@ -350,11 +353,15 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
         p = subprocess.run(base + enc + [f"{name}.mp4"], cwd=work, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", creationflags=NO_WINDOW, timeout=RENDER_SECONDS)
         if p.returncode == 0:
-            if label == "qsv":
+            if label == "nvenc":
+                _nvenc_ok = True
+            elif label == "qsv":
                 _qsv_ok = True
             break
         err = p.stderr[-1200:]
-        if label == "qsv":
+        if label == "nvenc":
+            _nvenc_ok = False
+        elif label == "qsv":
             _qsv_ok = False
     else:
         raise RuntimeError(f"Render failed: {err}")

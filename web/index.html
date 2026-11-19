@@ -1386,9 +1386,9 @@ function drawAdd(variant) {
       <div class="ob"><div class="ot cap-head"><span>Layout</span>
         <label title="When the stream has a webcam picture, clips put the streamer's face on top instead of cutting it off"><input type="checkbox" id="o_keepface" ${c?.keep_face === false ? "" : "checked"}>Keep the streamer's face</label></div>
         ${choice("o_layout", Object.entries(S.status.layouts).map(([k, v]) => ({v:k, label:LAYOUT_SHORT[k] || v, title:v, prev:`<span class="lay-prev ${esc(k)}"><span class="ph"><i></i></span></span>`})), c?.layout ?? "blur")}</div>
-      <div class="ob"><div class="ot">Video quality</div><input type="hidden" id="o_quality" value="720"><div class="seg" role="group" aria-label="Video quality">
-        <button type="button" data-seg="o_quality" data-v="720" aria-pressed="true">720p<small>Fast</small></button>
-        <button type="button" data-seg="o_quality" data-v="1080" aria-pressed="false">1080p<small>Sharper, about 2x slower</small></button></div></div>
+      <div class="ob"><div class="ot">Video quality</div><input type="hidden" id="o_quality" value="1080"><div class="seg" role="group" aria-label="Video quality">
+        <button type="button" data-seg="o_quality" data-v="720" aria-pressed="false">720p<small>Fast</small></button>
+        <button type="button" data-seg="o_quality" data-v="1080" aria-pressed="true">1080p<small>Crisp & Full HD</small></button></div></div>
       <div class="ob"><div class="ot">Language spoken</div><select id="o_lang" title="English uses PeakCut's own fast speech model. Other languages are written down by Whisper when YouTube has no transcript.">${opts({auto:"Find out by itself", en:"English", hi:"Hindi", ur:"Urdu", es:"Spanish", pt:"Portuguese", fr:"French", de:"German", ar:"Arabic", ru:"Russian", ja:"Japanese", ko:"Korean"}, c?.speech_lang && c.speech_lang !== "en" ? c.speech_lang : "auto")}</select></div>
       <div class="ob"><div class="ot">Part of the video</div><div class="range">
         <label>From<input id="o_from" type="number" min="0" placeholder="start" aria-label="From minute">min</label>${ic("arrowr")}

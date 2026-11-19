@@ -102,7 +102,7 @@ def resolve(url: str) -> dict:
     """Ask yt-dlp for the stream's playable address. Raises NotLive if the channel is offline."""
     import yt_dlp
     opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "logger": _Quiet(),
-            "format": "b[height<=720]/bv*[height<=720]+ba/b"}
+            "format": "b[height<=1080]/bv*[height<=1080]+ba/b"}
     if media.is_youtube(url) and media.youtube_paused():
         raise NotLive(media.YT_BLOCKED)
     try:
@@ -336,7 +336,7 @@ class Session:
                 stdin = None
                 if use_sl:
                     sl = [sys.executable, "-m", "streamlink", "--stdout", "--twitch-disable-ads", "--loglevel", "error",
-                          "--stream-segment-attempts", "5", "--retry-open", "3", url, "720p60,720p,best"]
+                          "--stream-segment-attempts", "5", "--retry-open", "3", url, "1080p60,1080p,720p60,720p,best"]
                     self.src_proc = subprocess.Popen(sl, stdout=subprocess.PIPE, stderr=errlog,
                                                      creationflags=media.NO_WINDOW)
                     stdin = self.src_proc.stdout

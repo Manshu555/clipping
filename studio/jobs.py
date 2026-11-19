@@ -109,7 +109,7 @@ _by_user: dict = {}                       # user -> {job id: job}: listing one p
 _lock = threading.RLock()
 on_clip_ready: list = []   # callbacks (job, clip), run once when a clip first finishes
 
-DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "layout": "blur", "quality": 720,
+DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "layout": "blur", "quality": 1080,
             "range_start": None, "range_end": None, "captions": True,
             "keep_face": True,     # a stream with a webcam picture: clips show the streamer's face (render.face_layout)
             "lang": "auto"}        # the language spoken: "auto" (found out), "en" (PeakCut's own model), or e.g. "hi"
@@ -304,7 +304,7 @@ def create(source: dict, options: dict, enqueue=True, creator=None, kind="video"
     c = creators.get(creator) if creator else None
     if c:
         d = creators.root(c["id"]) / ("live" if kind == "live" else "videos") / jid
-        base = {**DEFAULTS, **{k: c[k] for k in ("max_clips", "min_len", "max_len", "style", "layout", "captions", "keep_face")
+        base = {**DEFAULTS, **{k: c[k] for k in ("max_clips", "min_len", "max_len", "style", "layout", "captions", "keep_face", "quality")
                                if k in c}}
         if c.get("speech_lang") and c["speech_lang"] != "en":
             base["lang"] = c["speech_lang"]        # the creator's language (Setup): their videos are heard in it
