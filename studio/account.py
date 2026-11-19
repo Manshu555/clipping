@@ -36,8 +36,10 @@ def delete_clip(jid: str, cid: str) -> bool:
         if name:
             (d / "clips" / Path(str(name)).name).unlink(missing_ok=True)
     for stem in {cid, Path(str(clip.get("file") or cid)).stem}:     # the captions and the notes kept beside the clip
-        for ext in ("ass", "json"):
+        for ext in ("ass", "json", "srt"):
             (d / "clips" / f"{stem}.{ext}").unlink(missing_ok=True)
+    for ext in ("mp4", "jpg", "ass"):                               # the 16:9 copy made for a normal YouTube video
+        (d / "clips" / f"{cid}_wide.{ext}").unlink(missing_ok=True)
     src = clip.get("src")
     if src:                                        # the piece of video fetched or recorded just for this clip
         p = Path(src)

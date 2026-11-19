@@ -79,7 +79,27 @@ def install_fonts():
 
 
 LAYOUTS = {"blur": "Full frame + blurred fill", "zoom": "Zoomed in + blurred fill", "crop": "Fill the screen (centre crop)",
-           "gameplay": "Gameplay fills the screen, facecam in the corner"}
+           "gameplay": "Gameplay fills the screen, facecam in the corner",
+           "split": "Facecam on top, gameplay below"}
+FACE_LAYOUTS = ("gameplay", "split")     # the layouts that need to know where the webcam is
+HIDES_FACE = ("blur", "zoom", "crop")    # the layouts where a corner webcam is cut off, or shrunk to a speck
+SPLIT_TOP = (540, 860)                   # how tall the facecam half of a split clip may be, in the 1920-high frame
+
+
+def face_layout(layout: str, facecam, keep_face: bool) -> str:
+    """The layout a clip is really made in. With "keep the streamer's face" on, a stream that has a webcam
+    picture gets the split layout instead of one that would cut the webcam off or shrink it to a speck.
+    A layout chosen to show the webcam is kept; a stream without a webcam keeps the chosen layout."""
+    if keep_face and facecam and len(facecam) == 4 and facecam[2] > 8 and facecam[3] > 8 and layout in HIDES_FACE:
+        return "split"
+    return layout
+
+
+def split_top(facecam) -> int:
+    """How tall the facecam panel is: the webcam's own shape at full width, kept within SPLIT_TOP."""
+    fw, fh = max(1, int(facecam[2])), max(1, int(facecam[3]))
+    top = int(round(W * fh / fw / 2)) * 2
+    return max(SPLIT_TOP[0], min(SPLIT_TOP[1], top))
 
 
 def _ts(t):
@@ -125,7 +145,7 @@ def geometry(src_w, src_h, layout):
     return layout, fg_h, max(230, top - 190), min(1640, top + fg_h + 180)
 
 
-def _hook_events(hook, dur, y):
+def _hook_events(hook, dur, y, pw=W):
     """The heading: dark text in a white rounded box that fits it, on one line or two balanced ones."""
     f, size = _Font.get(HOOK["font"]), HOOK["size"]
     words = hook.split()
@@ -141,7 +161,7 @@ def _hook_events(hook, dur, y):
         widest = max(f.width(l, size) for l in lines)
     line_h = f.em(size) * 1.16
     bw, bh = widest + 2 * HOOK["pad_x"], line_h * len(lines) + 2 * HOOK["pad_y"]
-    x0, y0, r = (W - bw) / 2, y - bh / 2, min(HOOK["radius"], bh / 2)
+    x0, y0, r = (pw - bw) / 2, y - bh / 2, min(HOOK["radius"], bh / 2)
     x1, y1 = x0 + bw, y0 + bh
     n = lambda v: f"{v:.0f}"                                                         # noqa: E731
     box = (f"m {n(x0 + r)} {n(y0)} l {n(x1 - r)} {n(y0)} b {n(x1)} {n(y0)} {n(x1)} {n(y0)} {n(x1)} {n(y0 + r)} "
@@ -152,18 +172,19 @@ def _hook_events(hook, dur, y):
     ev = [f"Dialogue: 3,{span},Hook,,0,0,0,,{{\\an7\\pos(0,0)\\fad(160,0)\\c&H{HOOK['box']}&\\p1}}{box}{{\\p0}}"]
     for i, line in enumerate(lines):
         cy = y - line_h * (len(lines) - 1) / 2 + i * line_h - f.cap_shift(size)
-        ev.append(f"Dialogue: 4,{span},Hook,,0,0,0,,{{\\an5\\pos({W // 2},{cy:.0f})\\fad(160,0)\\fs{size}}}{line}")
+        ev.append(f"Dialogue: 4,{span},Hook,,0,0,0,,{{\\an5\\pos({pw // 2},{cy:.0f})\\fad(160,0)\\fs{size}}}{line}")
     return ev
 
 
-def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y) -> str:
+def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, pw=W, ph=H) -> str:
+    """`pw` x `ph` is the canvas the text is laid out on; the video it is drawn over is scaled to match."""
     st = STYLES.get(style_name, STYLES["bounce"])
     words = [dict(w, s=w["s"] - CAPTION_LEAD, e=w["e"] - CAPTION_LEAD) for w in words]
     strong = {_key(h) for h in highlight if _key(h)}
     head = f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: {W}
-PlayResY: {H}
+PlayResX: {pw}
+PlayResY: {ph}
 WrapStyle: 2
 ScaledBorderAndShadow: yes
 
@@ -176,7 +197,7 @@ Style: Hook,{HOOK['font']},{HOOK['size']},&H00{HOOK['ink']},&H00{HOOK['ink']},&H
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     dur = end - start
-    ev = _hook_events(_clean(hook), dur, hook_y)
+    ev = _hook_events(_clean(hook), dur, hook_y, pw)
     f = _Font.get(st["font"])
     inside = [dict(w, w=_clean(w["w"])) for w in words if w["s"] >= start - 0.05 and w["s"] < end]
     inside = sorted((w for w in inside if w["w"]), key=lambda w: w["s"])
@@ -197,7 +218,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             # they are not placed one by one. The line is drawn whole and centred, in a font the system has for it.
             line = " ".join(texts)
             fs = max(44, min(int(st["size"] * 0.7), int(1500 / max(1, len(line)) * 1.6)))
-            ev.append(f"Dialogue: 1,{_ts(g_start)},{_ts(g_end)},Cap,,60,60,0,,{{\\an5\\pos({W // 2},{cap_y:.0f})\\q0\\fs{fs}}}{line}")
+            ev.append(f"Dialogue: 1,{_ts(g_start)},{_ts(g_end)},Cap,,60,60,0,,{{\\an5\\pos({pw // 2},{cap_y:.0f})\\q0\\fs{fs}}}{line}")
             continue
         size = st["size"]
         gap = f.width("n n", size) - 2 * f.width("n", size) + (2 * st["outline"] + 6) * size / st["size"]   # a space, plus room for both outlines
@@ -207,7 +228,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             gap = f.width("n n", size) - 2 * f.width("n", size) + (2 * st["outline"] + 6) * size / st["size"]   # a space, plus room for both outlines
             total = sum(f.width(t, size) for t in texts) + gap * (len(texts) - 1)
         cy = cap_y - f.cap_shift(size)
-        x = (W - total) / 2
+        x = (pw - total) / 2
         p = st["pop"]
         for i, (w, t) in enumerate(zip(g, texts)):
             wd = f.width(t, size)
@@ -233,6 +254,20 @@ PIP_MARGIN = 26
 
 
 def _filter(layout, fg_h, facecam=None):
+    if layout == "split" and facecam:
+        # The streamer's face across the top, the game across the bottom, each filling its half. `fg_h` is how
+        # tall the face panel is. The game half is cut from the middle of the picture, away from the corner
+        # the webcam usually sits in.
+        fx, fy, fw, fh = (int(v) for v in facecam)
+        top, bottom = fg_h, H - fg_h
+        return (f"[0:v]fps={config.OUT_FPS},split=2[g][f];"
+                f"[f]crop={fw}:{fh}:{fx}:{fy},scale={W}:{top}:force_original_aspect_ratio=increase,crop={W}:{top},setsar=1[ft];"
+                f"[g]scale={W}:{bottom}:force_original_aspect_ratio=increase,crop={W}:{bottom},setsar=1[gb];"
+                f"[ft][gb]vstack=inputs=2[v0];")
+    if layout == "wide":
+        # a normal (not Short) video: the whole picture, 16:9, with black bars only if the source is another shape
+        return (f"[0:v]fps={config.OUT_FPS},scale={WIDE_W}:{WIDE_H}:force_original_aspect_ratio=decrease,"
+                f"pad={WIDE_W}:{WIDE_H}:(ow-iw)/2:(oh-ih)/2,setsar=1[v0];")
     if layout == "gameplay" and facecam:
         # The game fills the screen, and the webcam sits in the top corner of it, so a viewer sees
         # the play and the face at the same time.
@@ -270,8 +305,16 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     start, end = clip["start"], clip["end"]
     layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, clip.get("layout", "blur"))
     face = clip.get("facecam")
-    if layout == "gameplay" and not (face and len(face) == 4):
+    has_face = bool(face and len(face) == 4 and face[2] > 8 and face[3] > 8)
+    if layout == "gameplay" and not has_face:
         layout = "crop"     # no webcam found: the game fills the screen, which is still the right shape
+    if layout == "split":
+        if has_face:
+            # the heading sits on the line between the face and the game; captions in the game half
+            fg_h = split_top(face)
+            hook_y, cap_y = fg_h, fg_h + int((H - fg_h) * 0.62)
+        else:               # no webcam found: the whole picture, nothing cut off
+            layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, "blur")
     hook_y = _hook_y(layout, hook_y, face)
     ass = build_ass(words if clip.get("captions", True) else [], start, end, clip.get("hook", ""), clip.get("style", "bounce"),
                     clip.get("highlight_words", []), hook_y, cap_y)
@@ -319,3 +362,25 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
     for ext in ("mp4", "jpg", "ass"):
         shutil.move(str(work / f"{name}.{ext}"), str(out_dir / f"{name}.{ext}"))
     return {"file": f"{name}.mp4", "cover": f"{name}.jpg", "layout": layout}
+
+
+# ---------------------------------------------------------------- a normal 16:9 copy, for posting as a regular video
+WIDE_W, WIDE_H = 1920, 1080
+# The text is laid out on a 16:9 canvas as tall as the vertical one, so captions and the heading keep the same
+# size relative to the picture's height and every measurement above still holds. ffmpeg scales it down to 1080p.
+WIDE_PW, WIDE_PH = 3413, H
+WIDE_HOOK_Y, WIDE_CAP_Y = 190, 1500     # captions sit above where games put their own subtitles
+
+
+def render_wide(src: Path, out_dir: Path, name: str, clip: dict, words: list) -> dict:
+    """Writes <name>.mp4 (and .jpg, .ass): the clip as a normal landscape video, with the same captions and heading.
+    YouTube treats a vertical video under three minutes as a Short, so this is what goes up as a regular video."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    start, end = clip["start"], clip["end"]
+    ass = build_ass(words if clip.get("captions", True) else [], start, end, clip.get("hook", ""), clip.get("style", "bounce"),
+                    clip.get("highlight_words", []), WIDE_HOOK_Y, WIDE_CAP_Y, WIDE_PW, WIDE_PH)
+    work = Path(tempfile.mkdtemp(prefix="pk"))
+    try:
+        return _render_in(work, src, out_dir, name, start, end, "wide", WIDE_H, ass)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)

@@ -3,15 +3,16 @@ import collections
 import json
 import re
 import socket
-import ssl
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
 import numpy as np
 
-from . import alerts, auth, brain, config, creators, ctx, facecam, games, jobs, load, media, transcribe, usage
+from . import (alerts, auth, brain, config, creators, ctx, facecam, games, jobs, load, media, render, subtitles,
+               transcribe, usage)
 
 # ":username!user@host PRIVMSG #channel :the message"
 _NICK = re.compile(r"(?m)^:([A-Za-z0-9_]{2,25})!")
@@ -25,9 +26,44 @@ WINDOW = 240          # seconds of transcript shown to the AI per check
 CHAT_KEEP = 600       # seconds of chat names kept: only the last few minutes are ever read
 SR = 16000
 
+# Twitch chat, read anonymously: no account and no token. "justinfan" names are Twitch's read-only guests.
+CHAT_HOST, CHAT_PORT, CHAT_NICK = "irc.chat.twitch.tv", 6667, "justinfan12345"
+# A chat spike: messages are counted in 10-second buckets, and a bucket is a spike when it has at least
+# CHAT_RATIO times the median of the 3 minutes before it, and at least the creator's minimum.
+CHAT_BUCKET, CHAT_HISTORY, CHAT_RATIO = 10, 18, 2.5
+SPIKE_BEFORE, SPIKE_AFTER = 20, 10      # a chat-spike clip: 20 s before the spike, 10 s after it
+FACE_RECHECK = 180                      # no webcam found yet: look again after 3 minutes
+
 
 class NotLive(Exception):
     pass
+
+
+def chat_spike(history: list, count: int, minimum: int = 5, ratio: float = CHAT_RATIO):
+    """Is `count` messages in one bucket a spike, against the buckets just before it?
+
+    Returns how many times busier than usual it is, or None. The median is used, not the average, so one
+    earlier burst does not raise the bar for the next. A quiet chat (median 0) still needs `minimum`."""
+    if len(history) < CHAT_HISTORY or count < max(1, minimum):
+        return None
+    med = float(np.median(history[-CHAT_HISTORY:]))
+    if count < ratio * med:
+        return None
+    return round(count / med, 1) if med > 0 else float(count)
+
+
+def streamlink_ok() -> bool:
+    """Streamlink is used for Twitch when it is installed; otherwise yt-dlp finds the stream, as before."""
+    try:
+        import streamlink  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def rec_dir() -> Path:
+    """Where whole recordings are kept, when a creator asks for that: rec/ in PeakCut's data folder."""
+    return Path(config.env("PEAKCUT_REC_DIR") or config.DATA_DIR / "rec")
 
 
 def _trim_names(users: dict, second: int, kept: int) -> int:
@@ -135,6 +171,15 @@ class Session:
         self.chat_kept = 0                   # the second this was last pruned at
         self.chat_total = 0
         self.chat_on = False
+        self.chat_since = None        # stream second chat was (re)connected at: only buckets after it are counted
+        self.chat_next = None         # the next 10-second bucket to look at for a chat spike
+        self.last_chat_clip = -999.0  # when the last chat-spike clip began (stream seconds)
+        self.chat_spikes = 0
+        self.src_proc = None          # Streamlink, when it feeds the recording
+        self.lang = None              # the language spoken, once decided ("en" uses PeakCut's own speech model)
+        self.lang_votes = {}
+        self.lang_pieces = 0
+        self.recordings = []          # whole recordings kept in rec/, when the creator asks for that
         self.last_check = 0.0
         self.words_at_check = 0
         self.checks = 0
@@ -155,7 +200,7 @@ class Session:
         self.spikes = 0
         self.game = ""                # which game this stream is, when it can be told
         self.facecam_box = None       # where the webcam is, found once the first clip is made
-        self.facecam_checked = False  # the look is made once, even when it finds nothing
+        self.facecam_checked = 0.0    # when the webcam was last looked for (time.time()); 0 = not yet
         self.ai_busy = 0.0            # when the AI check now running was started, 0 when none is
 
     def _ask_ai(self, window=None, why=None):
@@ -229,8 +274,9 @@ class Session:
         with self.lock:
             self.job.update(status="done", stage=note)
         jobs.save(self.job)
-        if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
+        for p in (self.proc, self.src_proc):
+            if p and p.poll() is None:
+                p.terminate()
 
     def _ingest(self):
         """Record the stream. However this ends, even when ffmpeg cannot start at all, the session is marked as
@@ -262,18 +308,42 @@ class Session:
             with self.lock:
                 self.seg_clock = max(self.seg_clock, self.samples / SR)
             p = f"p{self.part:02d}"
-            cmd = ["ffmpeg", "-v", "error", "-reconnect", "1", "-reconnect_streamed", "1",
-                   "-reconnect_delay_max", "10"]
-            for u in info["urls"]:
-                cmd += ["-i", u]
-            a_in = "1:a:0" if len(info["urls"]) > 1 else "0:a:0"
+            twitch = re.match(r"^https?://(?:www\.)?twitch\.tv/([A-Za-z0-9_]+)", url)
+            use_sl = bool(twitch) and streamlink_ok()
+            if use_sl:
+                # Streamlink hands over the stream itself (and leaves out Twitch's ad breaks); ffmpeg reads it.
+                cmd = ["ffmpeg", "-v", "error", "-i", "pipe:0"]
+                a_in = "0:a:0"
+            else:
+                cmd = ["ffmpeg", "-v", "error", "-reconnect", "1", "-reconnect_streamed", "1",
+                       "-reconnect_delay_max", "10"]
+                for u in info["urls"]:
+                    cmd += ["-i", u]
+                a_in = "1:a:0" if len(info["urls"]) > 1 else "0:a:0"
             cmd += ["-map", "0:v:0", "-map", a_in, "-c", "copy", "-f", "segment", "-segment_time", str(SEG_SEC),
                     "-reset_timestamps", "1", "-segment_format", "mpegts", "-segment_list", f"{p}.csv",
-                    "-segment_list_type", "csv", f"{p}_%05d.ts",
-                    "-map", a_in, "-vn", "-ac", "1", "-ar", str(SR), "-f", "s16le", "pipe:1"]
+                    "-segment_list_type", "csv", f"{p}_%05d.ts"]
+            if self.settings.get("keep_recording"):
+                # the whole stream as well, in rec/, one file per connection (a dropped stream starts a new one)
+                who = twitch.group(1).lower() if twitch else re.sub(r"[^\w\-]", "_", self.job["source"].get("name", "stream"))[:40]
+                rec = rec_dir() / who
+                rec.mkdir(parents=True, exist_ok=True)
+                out = rec / f"{time.strftime('%Y%m%d-%H%M%S')}_{p}.ts"
+                self.recordings.append(str(out))
+                cmd += ["-map", "0:v:0", "-map", a_in, "-c", "copy", "-f", "mpegts", str(out)]
+            cmd += ["-map", a_in, "-vn", "-ac", "1", "-ar", str(SR), "-f", "s16le", "pipe:1"]
             with open(self.dir / "ffmpeg.log", "ab") as errlog:
-                self.proc = subprocess.Popen(cmd, cwd=self.buf, stdout=subprocess.PIPE, stderr=errlog,
+                stdin = None
+                if use_sl:
+                    sl = [sys.executable, "-m", "streamlink", "--stdout", "--twitch-disable-ads", "--loglevel", "error",
+                          "--stream-segment-attempts", "5", "--retry-open", "3", url, "720p60,720p,best"]
+                    self.src_proc = subprocess.Popen(sl, stdout=subprocess.PIPE, stderr=errlog,
+                                                     creationflags=media.NO_WINDOW)
+                    stdin = self.src_proc.stdout
+                self.proc = subprocess.Popen(cmd, cwd=self.buf, stdin=stdin, stdout=subprocess.PIPE, stderr=errlog,
                                              creationflags=media.NO_WINDOW)
+                if stdin is not None:
+                    stdin.close()          # ffmpeg holds it now; when Streamlink ends, ffmpeg sees the end of the stream
                 got = 0
                 while True:
                     data = self.proc.stdout.read(SR * 2)  # one second of 16-bit mono
@@ -288,6 +358,8 @@ class Session:
                         self.samples += len(data) // 2
                         self.db.append(level)
                 self.proc.wait()
+                if self.src_proc and self.src_proc.poll() is None:
+                    self.src_proc.terminate()
             fails = 0 if got > SR * 2 * 20 else fails + 1
             if fails >= 3:
                 break
@@ -318,12 +390,16 @@ class Session:
     def _chat(self, channel):
         while not self.stop_flag.is_set() and not self.ended:
             try:
-                raw = socket.create_connection(("irc.chat.twitch.tv", 6697), timeout=20)
-                s = ssl.create_default_context().wrap_socket(raw, server_hostname="irc.chat.twitch.tv")
-                s.sendall(f"NICK justinfan{int(time.time()) % 90000 + 10000}\r\nJOIN #{channel}\r\n".encode())
+                s = socket.create_connection((CHAT_HOST, CHAT_PORT), timeout=20)
+                s.sendall(f"NICK {CHAT_NICK}\r\nJOIN #{channel}\r\n".encode())
                 s.settimeout(30)
                 rest = b""
                 self.chat_on = True
+                with self.lock:
+                    # Seconds while chat was away have no messages in them. Counting those as a quiet chat would
+                    # make the first minute after a reconnect look like a spike, so the history starts again here.
+                    self.chat_since = int(self.samples / SR)
+                    self.chat_next = None
                 while not self.stop_flag.is_set() and not self.ended:
                     try:
                         data = s.recv(8192)
@@ -392,7 +468,15 @@ class Session:
         if not hurry or n > SR * 24:
             # cut at the quietest moment between 4 and 6.5 s, so no word is split; the rest waits for the next pass
             _, cut = next(transcribe._chunks(audio, 4.0, 6.5))
-        words = transcribe.transcribe(audio[:cut])
+        lang = self._language(audio[:cut])
+        if lang and lang != "en":
+            try:
+                words = subtitles.whisper_words(audio[:cut], lang)
+            except Exception as e:  # noqa: BLE001 - Whisper could not run: English words are better than none
+                self.job["ai"]["last_error"] = f"Speech in {lang}: {str(e)[-150:]}"
+                words = transcribe.transcribe(audio[:cut])
+        else:
+            words = transcribe.transcribe(audio[:cut])
         off = base / SR
         for w in words:
             w["s"], w["e"] = round(w["s"] + off, 2), round(w["e"] + off, 2)
@@ -405,8 +489,40 @@ class Session:
         (self.dir / "words.json").write_text(json.dumps(self.words), encoding="utf-8")
         return True
 
+    LANG_VOTES = 6            # pieces of speech listened to before the stream's language is decided
+
+    def _language(self, audio) -> str:
+        """The language spoken on this stream: set in Setup, or worked out by Whisper from the first half-minute or
+        so of speech. Several pieces vote, since game characters can speak English on a stream that is not.
+        Until it is decided (and without Whisper) the stream is treated as English, as before."""
+        want = str(self.settings.get("speech_lang") or "en").strip().lower()
+        if want != "auto":
+            return want
+        if self.lang:
+            return self.lang
+        if not subtitles.whisper_installed() or float(np.sqrt((audio.astype(np.float32) ** 2).mean())) < 100:
+            return "en"                     # no Whisper, or a quiet piece that says nothing about the language
+        try:
+            for k, p in subtitles.language_votes(audio).items():
+                self.lang_votes[k] = self.lang_votes.get(k, 0.0) + float(p)
+            self.lang_pieces += 1
+        except Exception:  # noqa: BLE001
+            self.lang_pieces += 1
+        if self.lang_pieces >= self.LANG_VOTES or (self.ended and self.lang_votes):
+            self.lang = max(self.lang_votes, key=self.lang_votes.get) if self.lang_votes else "en"
+            self.job["lang"] = self.lang
+            creators.log(self.job["creator"], f"Speech language: {self.lang}" +
+                         ("" if self.lang == "en" else " (written down by Whisper)"))
+        return self.lang or "en"
+
     AUTO_BEFORE, AUTO_AFTER, AUTO_GAP = 30, 20, 60   # seconds of stream sent around a jump; least time between jumps
     JUMP = 0.6                                        # 60% louder or busier than the last three minutes
+
+    def jump_window(self, t: float) -> tuple:
+        """The stretch of stream the AI reads around a jump. Long enough to hold the creator's longest clip, or a
+        clip set to 35-50 s could never fit in it: the half minute before used to be all it got."""
+        before = max(self.AUTO_BEFORE, int(self.settings.get("max_len") or 0) - self.AUTO_AFTER + 5)
+        return t - before, t + self.AUTO_AFTER
 
     def _watch_spikes(self):
         """Always on. Keep a running average of loudness and chat over the last three minutes (leaving out the
@@ -444,6 +560,41 @@ class Session:
             self.last_spike = n
             self.spikes += 1
 
+    def _watch_chat_clips(self):
+        """When Setup says so (or watch.ps1 asks): a clip straight away whenever chat spikes, with no AI deciding.
+
+        Each finished 10-second bucket is looked at once, against the median of the 3 minutes before it. A spike
+        becomes a clip from 20 s before it to 10 s after it, made from the rolling buffer once that much has been
+        recorded. A spike that falls inside the last spike clip, or on top of a clip already made, is left out, so a
+        chat that stays wild for half a minute gives one clip, not three."""
+        if not self.settings.get("chat_clips") or self.chat_since is None:
+            return
+        minimum = int(self.settings.get("chat_min") or 5)
+        with self.lock:
+            done_to = int(self.samples / SR) // CHAT_BUCKET        # buckets before this one are complete
+            first = -(-self.chat_since // CHAT_BUCKET)              # the first bucket chat was there for in full
+            nxt = max(self.chat_next if self.chat_next is not None else first, first)
+            counts = {b: sum(self.chat.get(t, 0) for t in range(b * CHAT_BUCKET, (b + 1) * CHAT_BUCKET))
+                      for b in range(max(first, nxt - CHAT_HISTORY), done_to)}
+            self.chat_next = done_to
+        for b in range(nxt, done_to):
+            hist = [counts[x] for x in range(max(first, b - CHAT_HISTORY), b)]
+            times = chat_spike(hist, counts[b], minimum)
+            if times is None:
+                continue
+            t = float(b * CHAT_BUCKET)
+            start, end = max(0.0, t - SPIKE_BEFORE), t + SPIKE_AFTER
+            if t < self.last_chat_clip + SPIKE_BEFORE + SPIKE_AFTER:
+                continue                                            # still the same moment
+            taken = [(k["start"], k["end"]) for k in self.job["clips"]] + [(m["start"], m["end"]) for m in self.manual]
+            if any(min(end, b_) - max(start, a_) > 0.5 * (end - start) for a_, b_ in taken):
+                continue                                            # already clipped
+            self.last_chat_clip = t
+            self.chat_spikes += 1
+            why = f"Chat spike: {counts[b]} messages in 10 s ({times:g}x the usual)"
+            self.manual.append({"start": start, "end": end, "why": why})
+            creators.log(self.job["creator"], why)
+
     def _ai_check(self, window=None, why=None):
         """Judge 1 reads only the words. If it finds a moment, judge 2 reads only the loudness and chat activity
         for the same stretch, without seeing the words. A clip is made when both say yes (or as set in Setup)."""
@@ -459,6 +610,10 @@ class Session:
         recent = [c for c in self.job["clips"] if c.get("score", 0) > 0 and time.time() - c.get("made_at", 0) < 3600]
         last_clip = max((c.get("made_at", 0) for c in self.job["clips"]), default=self.started_at)
         must = st["must_clip_min"] > 0 and time.time() - last_clip >= st["must_clip_min"] * 60
+        # The stream just got much louder or chat much busier: something happened. The words judge is asked for
+        # the best moment in that stretch instead of "usually nothing", since a scream or a crowd going wild is
+        # rarely clever words. The reaction judge still has to agree before it is clipped.
+        jump = bool(why and str(why).startswith("Jump"))
         verdict = {"t": round(now), "transcript": None, "reaction": None, "trigger": why}
         if len(win) < 8:
             self.skipped += 1
@@ -470,14 +625,14 @@ class Session:
         title, up = self.job["title"], self.job["uploader"]
         try:
             cands, tok = brain.judge_transcript(win, ws, now, title, up, st["min_len"], st["max_len"], self.job["clips"],
-                                                n=1 if every <= 2 else 2, must=must, game=self._game(),
+                                                n=1 if every <= 2 or jump else 2, must=must or jump, game=self._game(),
                                                 timeout=config.LIVE_AI_TIMEOUT)  # Auto (0) asks for one
         except Exception as e:  # noqa: BLE001
             self.job["ai"]["last_error"] = str(e)[-200:]
             return self._verdict(verdict, "AI error: " + str(e)[-80:])
         self.checks += 1
         self.tokens += tok
-        keep = [c for c in cands if c["score"] >= (40 if must else st["min_score"])]
+        keep = [c for c in cands if c["score"] >= (40 if must or jump else st["min_score"])]
         verdict["transcript"] = max((c["score"] for c in cands), default=0)
         if not keep:
             return self._verdict(verdict, "Words judge: nothing clip-worthy")
@@ -607,14 +762,19 @@ class Session:
             return
         finally:
             lst.unlink(missing_ok=True)
-        # Only the gameplay layout uses a webcam, and only once the clip's own file is written: the
-        # webcam is looked for in it, once per stream.
-        if clip.get("layout") == "gameplay":
-            if not self.facecam_checked:
+        # The webcam is looked for in the clip's own file, when a layout uses it or to keep the streamer's face in
+        # the clip. Once per stream when found; when not, again after a while, since streams often open on a
+        # "starting soon" screen with no webcam yet.
+        keep = self.settings.get("keep_face", True)
+        if clip.get("layout") in render.FACE_LAYOUTS or keep:
+            if not self.facecam_box and time.time() - (self.facecam_checked or 0) > FACE_RECHECK:
                 self.facecam_box = self._find_facecam(src)
-                self.facecam_checked = True
+                self.facecam_checked = time.time()
+                if self.facecam_box and keep:
+                    self._face_found_late(clip)
             if self.facecam_box:
                 clip["facecam"] = self.facecam_box
+                clip["layout"] = render.face_layout(clip.get("layout", "blur"), self.facecam_box, keep)
         dur = segs[-1][2] - segs[0][1]
         offset = self._align(src, segs[0][1] + self.clock_fix, dur)
         self.clock_fix = offset - segs[0][1]  # the two clocks drift ~4 s an hour; start the next clip from here
@@ -622,6 +782,20 @@ class Session:
         clip["start"] = max(clip["start"], clip["src_offset"])
         clip["end"] = min(clip["end"], clip["src_end"])
         jobs.render_one(self.job, clip, list(self.words))
+
+    def _face_found_late(self, current):
+        """The webcam was only found now: the clips already made from this stream without it are made again with the
+        face on top, so every clip of a stream with a face looks the same. Each keeps its own piece of the stream."""
+        for k in list(self.job["clips"]):
+            if k is current or k.get("status") != "done" or not k.get("src") or not Path(k["src"]).exists():
+                continue
+            new = render.face_layout(k.get("layout", "blur"), self.facecam_box, True)
+            if new != k.get("layout"):
+                k["facecam"] = self.facecam_box
+                try:
+                    jobs.request_render(self.job["id"], k["id"], {"layout": new})
+                except Exception:  # noqa: BLE001 - that clip stays as it was
+                    pass
 
     def _align(self, src, guess, dur):
         """Where `src` really starts on the transcript clock. The video pieces and the audio feed keep separate
@@ -669,7 +843,9 @@ class Session:
                       "rejected": self.rejected, "verdicts": list(reversed(self.verdicts)),
                       "every_min": int(self.settings.get("ai_every_min", 3)) or 3,
                       "auto": None,
-                      "pending_clips": len(self.manual)})
+                      "pending_clips": len(self.manual),
+                      "chat_connected": self.chat_on, "chat_spikes": self.chat_spikes,
+                      "streamlink": bool(self.src_proc), "recordings": len(self.recordings)})
         jobs.save(self.job)
 
     def _analyze(self):
@@ -692,6 +868,8 @@ class Session:
                 # stream suddenly gets louder or chat busier, or when someone says "clip".
                 every = int(self.settings.get("ai_every_min", 3)) or 3
                 self._watch_spikes()
+                if not self.user_stopped:
+                    self._watch_chat_clips()
                 sp, said = self.spike, self.said
                 if self.user_stopped:
                     pass
@@ -700,7 +878,7 @@ class Session:
                     self._ask_ai((said["t"] - self.SAID_BEFORE, said["t"] + self.SAID_AFTER), said["why"])
                 elif sp and (self.t_done >= sp["t"] + self.AUTO_AFTER or (self.ended and not busy)):
                     self.spike = None
-                    self._ask_ai((sp["t"] - self.AUTO_BEFORE, sp["t"] + self.AUTO_AFTER), "Jump: " + sp["why"])
+                    self._ask_ai(self.jump_window(sp["t"]), "Jump: " + sp["why"])
                 elif self.t_done - self.last_check >= every * 60 or (self.ended and not busy and self.t_done > self.last_check):
                     self._ask_ai()
                 self._publish()

@@ -341,6 +341,8 @@ def see(prompt: str, image: bytes, timeout: float | None = None) -> tuple[str, i
     body = {"model": model, "stream": False, "messages": [{"role": "user", "content": [
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64}}]}]}
+    if provider() == "ollama":
+        body["reasoning_effort"] = "none"     # as for text: thinking out loud first takes many times longer
     r = httpx.post(f"{base_url()}/chat/completions", json=body, headers=headers, timeout=timeout or 120)
     if r.status_code != 200:
         _fail(r, model)
@@ -417,6 +419,9 @@ def _from_events(text: str) -> dict:
 def _openai(model, prompt, schema, timeout=None):
     headers = {"Authorization": f"Bearer {key()}"} if key() else {}
     body = {"model": model, "messages": [{"role": "user", "content": _wrapped(prompt, schema)}], "stream": False}
+    if provider() == "ollama":
+        # Local models that "think" out loud first (Qwen 3.5, for one) take many times longer for the same answer.
+        body["reasoning_effort"] = "none"
     # Most services accept these two extras; a few models refuse one of them, so they are dropped on a refusal.
     extras = [{"temperature": 0.4, "response_format": {"type": "json_object"}}, {"response_format": {"type": "json_object"}}, {}]
     r = None

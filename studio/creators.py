@@ -20,7 +20,12 @@ DEFAULTS = {"name": "", "channel": "", "style": "bounce", "layout": "blur", "cap
             "game": "",
             "trigger_words": "clip that, clip it",
             "autopost": False, "accounts": [], "post_min_score": 75, "post_gap_min": 45, "daily_cap": 6,
-            "privacy": "public", "post_footer": "", "rate_per_1k": 0.0, "channels": {}}
+            "privacy": "public", "yt_format": "short", "post_footer": "", "rate_per_1k": 0.0, "channels": {},
+            # Twitch: clip straight away when chat suddenly gets much busier, and keep the whole recording
+            "chat_clips": False, "chat_min": 5, "keep_recording": False,
+            "keep_face": True,     # a stream with a webcam picture: clips keep the streamer's face in them
+            "speech_lang": "en"}   # the language spoken live: "en" (PeakCut's own model), another code for Whisper,
+                                    # or "auto" to work it out. Whisper needs a free graphics card to keep up live.
 PLATFORMS = ("youtube", "twitch", "kick")
 
 
@@ -42,7 +47,7 @@ def _fix(c: dict) -> dict:
         c["channel"] = next((ch[k] for k in PLATFORMS if k in ch), "")
     return c
 NUMERIC = {"min_len": (5, 120), "max_len": (10, 180), "max_clips": (1, 20), "min_score": (0, 100), "buffer_min": (5, 120), "live_per_hour": (1, 60), "ai_every_min": (1, 30), "auto_jump_pct": (20, 300), "must_clip_min": (0, 240), "min_gap_min": (0, 60),
-           "post_min_score": (0, 100), "post_gap_min": (5, 1440), "daily_cap": (1, 50)}
+           "post_min_score": (0, 100), "post_gap_min": (5, 1440), "daily_cap": (1, 50), "chat_min": (1, 1000)}
 
 
 def root(cid) -> Path:
@@ -66,7 +71,7 @@ def _clean(data: dict) -> dict:
         if k in NUMERIC:
             lo, hi = NUMERIC[k]
             v = max(lo, min(hi, int(float(v))))
-        elif k in ("auto_watch", "autopost", "ai_only_on_spike"):
+        elif k in ("auto_watch", "autopost", "ai_only_on_spike", "chat_clips", "keep_recording", "keep_face"):
             v = bool(v)
         elif k == "channels":
             v = {p: str(u).strip()[:300] for p, u in (v.items() if isinstance(v, dict) else []) if p in PLATFORMS and str(u).strip()}
@@ -80,6 +85,11 @@ def _clean(data: dict) -> dict:
             v = v if v in ("both", "either") else "both"
         elif k == "privacy":
             v = v if v in ("public", "unlisted", "private") else "public"
+        elif k == "yt_format":
+            v = v if v in ("short", "video") else "short"
+        elif k == "speech_lang":
+            v = str(v).strip().lower()
+            v = v if v == "auto" or re.fullmatch(r"[a-z]{2,3}", v) else "en"
         else:
             v = str(v).strip()[:300]
         out[k] = v

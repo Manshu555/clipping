@@ -1,0 +1,5 @@
+# Extra packages for recording Twitch with watch.ps1 (or from the dashboard). PeakCut works without them:
+# without Streamlink it records through yt-dlp, and without Whisper the .srt files come from its own transcript.
+#   pip install -r requirements-twitch.txt
+streamlink==8.6.3
+openai-whisper==20250625

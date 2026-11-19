@@ -4,6 +4,7 @@ import json
 import os
 import math
 import queue
+import re
 import shutil
 import threading
 import time
@@ -11,7 +12,8 @@ import traceback
 import uuid
 from pathlib import Path
 
-from . import brain, config, creators, ctx, facecam, games, load, media, quality, render, roman, safe, transcribe, usage
+from . import (brain, config, creators, ctx, facecam, games, load, media, quality, render, roman, safe, subtitles,
+               transcribe, usage)
 
 class _FairQueue:
     """Whose video is next. Each person has their own line and the lines take turns, so someone who adds ten
@@ -108,7 +110,9 @@ _lock = threading.RLock()
 on_clip_ready: list = []   # callbacks (job, clip), run once when a clip first finishes
 
 DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "layout": "blur", "quality": 720,
-            "range_start": None, "range_end": None, "captions": True}
+            "range_start": None, "range_end": None, "captions": True,
+            "keep_face": True,     # a stream with a webcam picture: clips show the streamer's face (render.face_layout)
+            "lang": "auto"}        # the language spoken: "auto" (found out), "en" (PeakCut's own model), or e.g. "hi"
 
 
 LIMITS = {"max_clips": (1, 20), "min_len": (5, 120), "max_len": (10, 180), "quality": (360, 1080)}
@@ -118,9 +122,9 @@ def clean_options(options) -> dict:
     """Only known settings, each inside its allowed range. Raises ValueError on nonsense."""
     out = {}
     for k, v in (options if isinstance(options, dict) else {}).items():
-        if k == "captions":
+        if k in ("captions", "keep_face"):
             if not isinstance(v, bool):
-                raise ValueError("Captions must be on or off.")
+                raise ValueError("Captions must be on or off." if k == "captions" else "Keeping the face must be on or off.")
             out[k] = v
             continue
         if k not in DEFAULTS or v in ("", None):
@@ -132,6 +136,9 @@ def clean_options(options) -> dict:
             v = v if v in render.STYLES else DEFAULTS["style"]
         elif k == "layout":
             v = v if v in render.LAYOUTS else DEFAULTS["layout"]
+        elif k == "lang":
+            v = str(v).strip().lower()
+            v = v if v == "auto" or re.fullmatch(r"[a-z]{2,3}", v) else "auto"
         else:                                    # range_start, range_end: seconds into the video
             v = float(v)
             if not math.isfinite(v) or v < 0:
@@ -180,7 +187,16 @@ def save(job):
             return
         tmp = d / "job.json.tmp"
         tmp.write_text(text, encoding="utf-8")
-        tmp.replace(d / "job.json")
+        # On Windows the file can be held for a moment by something else (the virus scanner reading what was just
+        # written), and the rename is then refused. A download saves its progress several times a second, and one
+        # refused save used to stop the whole download. So it waits a little, and if the file is still held, this
+        # save is skipped: the job is kept in memory, and the next save (a moment later) writes it.
+        for wait in (0.05, 0.1, 0.2, 0.4, 0.8, 1.6):
+            try:
+                tmp.replace(d / "job.json")
+                return
+            except PermissionError:
+                time.sleep(wait)
 
 
 def _set(job, **kw):
@@ -288,7 +304,10 @@ def create(source: dict, options: dict, enqueue=True, creator=None, kind="video"
     c = creators.get(creator) if creator else None
     if c:
         d = creators.root(c["id"]) / ("live" if kind == "live" else "videos") / jid
-        base = {**DEFAULTS, **{k: c[k] for k in ("max_clips", "min_len", "max_len", "style", "layout", "captions")}}
+        base = {**DEFAULTS, **{k: c[k] for k in ("max_clips", "min_len", "max_len", "style", "layout", "captions", "keep_face")
+                               if k in c}}
+        if c.get("speech_lang") and c["speech_lang"] != "en":
+            base["lang"] = c["speech_lang"]        # the creator's language (Setup): their videos are heard in it
     else:
         d, base, creator = config.user_dir(ctx.uid()) / "jobs" / jid, dict(DEFAULTS), None
     opts = {**base, **clean_options(options)}
@@ -376,14 +395,35 @@ def render_one(job, clip, words):
     save(job)
     try:
         if not clip.get("src") and not job.get("source_path"):
+            _whole_on_disk(job)          # the whole video finished downloading after the clips were first tried
+        if not clip.get("src") and not job.get("source_path"):
             _piece_again(job, clip)
         off = clip.get("src_offset", 0.0)
         src = Path(clip["src"]) if clip.get("src") else Path(job["source_path"])
         if not clip.get("src"):
             clip["end"] = min(clip["end"], job["duration"])
+        keep = (job.get("options") or {}).get("keep_face", True) and job.get("kind") != "live"
+        if (clip.get("layout") in render.FACE_LAYOUTS or (keep and clip.get("layout") in render.HIDES_FACE)) \
+                and not clip.get("facecam"):
+            # A layout with the webcam in it (picked in the clip editor), or "keep the streamer's face" on a clip
+            # made again: find the webcam now, once for the video, and put the face on top when there is one.
+            # (Live recordings do this themselves, for the stream as a whole.)
+            face = job.get("facecam") or _facecam_in(job, src)
+            if face:
+                clip["facecam"] = face
+                clip["layout"] = render.face_layout(clip.get("layout", "blur"), face, keep)
         local = dict(clip, start=clip["start"] - off, end=clip["end"] - off, hook=roman.to_roman(clip.get("hook") or ""))
         near = _caption_words(job, clip, words, off) if clip.get("captions", True) else []
         out = render.render_clip(src, d / "clips", clip["id"], local, near, job["width"], job["height"])
+        try:
+            # an .srt next to every clip; with captions off the words are still there to write it from
+            srt_words = near or [dict(w, s=w["s"] - off, e=w["e"] - off) for w in words
+                                 if clip["start"] - 1 <= w["s"] <= clip["end"] + 1]
+            got = subtitles.write(d / "clips" / out["file"], srt_words, local["start"], local["end"])
+            if got:
+                out.update(srt=got["file"], srt_from=got["from"])
+        except Exception:  # noqa: BLE001 - a missing subtitle file never costs the clip
+            pass
         clip.update(out, status="done", version=clip.get("version", 0) + 1, error=None)
         post = {k: clip[k] for k in ("title", "description", "hashtags", "hook", "start", "end", "score")}
         (d / "clips" / f"{clip['id']}.json").write_text(json.dumps(post, indent=1), encoding="utf-8")
@@ -400,6 +440,31 @@ def render_one(job, clip, words):
         clip.update(status="error", error=safe.friendly(e, 400))
         creators.log(job["creator"], f"Clip failed: {safe.friendly(e, 200)}")
     save(job)
+
+
+def wide_file(job, clip) -> Path:
+    """The clip as a normal 16:9 video, for posting to YouTube as a regular video instead of a Short. Made the
+    first time it is needed and kept with the clip; made again if the clip has been re-made since."""
+    d = Path(job["dir"]) / "clips"
+    name = f"{clip['id']}_wide"
+    if clip.get("wide_version") == clip.get("version") and (d / f"{name}.mp4").is_file():
+        return d / f"{name}.mp4"
+    if not clip.get("src") and not job.get("source_path"):
+        _piece_again(job, clip)
+    off = clip.get("src_offset", 0.0)
+    src = Path(clip["src"]) if clip.get("src") else Path(job["source_path"])
+    words = []
+    if clip.get("captions", True):
+        try:
+            words = json.loads((Path(job["dir"]) / "words.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            words = []
+    local = dict(clip, start=clip["start"] - off, end=clip["end"] - off, hook=roman.to_roman(clip.get("hook") or ""))
+    near = _caption_words(job, clip, words, off) if clip.get("captions", True) else []
+    out = render.render_wide(src, d, name, local, near)
+    clip["wide_version"] = clip.get("version")
+    save(job)
+    return d / out["file"]
 
 
 def _caption_words(job, clip, words, off):
@@ -464,8 +529,28 @@ def _english_part(job, clip):
     return [w for w in en if clip["start"] - 0.5 <= w["s"] <= clip["end"] + 0.5]
 
 
-LONG_VIDEO = 40 * 60   # above this, fetch only the pieces that become clips
+# Above this, fetch only the pieces that become clips instead of the whole video. A connection that drops long
+# downloads of small ranges (they hang) can set it higher: the whole video is then fetched once, which resumes.
+LONG_VIDEO = float(config.env("PEAKCUT_LONG_VIDEO_MINUTES", "40") or 40) * 60
 PAD = 8                # seconds kept either side of a fetched piece, so clips can be re-trimmed
+
+
+def _whole_on_disk(job):
+    """The whole video, if it is already downloaded in the video's folder: used instead of fetching a clip's piece
+    again. A half-written or half-joined download (.part, .temp, the separate .fNNN streams) is not it."""
+    d = Path(job["dir"])
+    found = [p for p in d.glob("source.*")
+             if p.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov")
+             and not re.search(r"\.(f\d+|temp|part)\.", p.name + ".")]
+    for p in sorted(found, key=lambda p: p.stat().st_size, reverse=True):
+        try:
+            info = media.probe(p)
+        except Exception:  # noqa: BLE001 - not a whole, readable video
+            continue
+        job.update(source_path=str(p), width=info["width"], height=info["height"])
+        save(job)
+        return p
+    return None
 
 
 def _piece_again(job, clip):
@@ -521,6 +606,75 @@ def _covers(words: list, start: float, end: float) -> bool:
     inside = [w for w in words if start <= w["s"] <= end]
     minutes = max(0.5, (end - start) / 60)
     return len(inside) >= 25 * minutes and inside[-1]["s"] >= start + 0.85 * (end - start)
+
+
+def _whisper_transcript(job, d: Path, audio, offset: float):
+    """A video in a language PeakCut's own speech model does not know (it knows English), with no transcript from
+    YouTube: the whole of it is written down by faster-whisper, and then read like a YouTube transcript would be.
+    Returns (words on the video's clock, language), or None to carry on with the own model as before.
+
+    The words are kept in whisper.json, so a restart does not write a ten-hour video down twice."""
+    from . import fastwhisper
+    if not fastwhisper.available() or len(audio) < 16000 * 30:
+        return None
+    saved = d / "whisper.json"
+    if saved.is_file():
+        try:
+            kept = json.loads(saved.read_text(encoding="utf-8"))
+            if kept.get("offset") == offset and kept.get("words"):
+                job.update(transcript_from="whisper", lang=kept["lang"])
+                return kept["words"], kept["lang"]
+        except ValueError:
+            pass
+    pref = str(job["options"].get("lang") or "auto")
+    if pref == "en":
+        return None                             # English, as chosen: PeakCut's own model
+    if pref != "auto":
+        lang = pref                             # chosen in Options or the creator's Setup: no guessing
+    else:
+        # Found out from the speech. A stream that mixes in English (Hinglish, a game's English dialogue) can be
+        # heard as English: choosing the language in Options is the sure way.
+        _set(job, stage="Listening for the language spoken")
+        try:
+            lang = fastwhisper.language(audio)
+        except Exception:  # noqa: BLE001 - Whisper could not run: the own model, as before
+            return None
+    if not lang or lang == "en":
+        return None                             # English: PeakCut's own model is quicker and as good
+    fastwhisper.free_the_card()
+    _set(job, stage=f"Writing down the {lang} speech with Whisper")
+
+    shown = [-1]
+
+    def progress(p):                            # once per percent: a long video has thousands of pieces of speech
+        if int(p * 100) > shown[0]:
+            shown[0] = int(p * 100)
+            _set(job, progress=max(job["progress"], 0.14 + 0.5 * p), stage=f"Writing down the {lang} speech ({shown[0]}%)")
+    try:
+        words = fastwhisper.transcribe(audio, lang, progress)
+    except Exception as e:  # noqa: BLE001
+        job.setdefault("ai", {}).setdefault("log", []).append(f"Whisper failed, using the own model: {str(e)[-120:]}")
+        return None
+    words = [dict(w, s=round(w["s"] + offset, 2), e=round(w["e"] + offset, 2)) for w in words]
+    saved.write_text(json.dumps({"offset": offset, "lang": lang, "words": words}), encoding="utf-8")
+    job.update(transcript_from="whisper", lang=lang)
+    return (words, lang) if len(words) >= 20 else None
+
+
+def _facecam_in(job, src: Path) -> list | None:
+    """The webcam, looked for in this file (a clip's own piece, or the whole video). Only a sure answer is used,
+    and it is kept on the video so the next clip does not look again (nor when there is none: one look per video)."""
+    if job.get("facecam_none"):
+        return None
+    try:
+        box = facecam.detect(src, ask=brain.look_for_facecam)
+    except Exception:  # noqa: BLE001 - a missing facecam is not a failure
+        return None
+    if not box or box.get("conf") != "high":
+        job["facecam_none"] = True
+        return None
+    job["facecam"] = [box["x"], box["y"], box["w"], box["h"]]
+    return job["facecam"]
 
 
 def _facecam(job) -> list | None:
@@ -642,8 +796,11 @@ def _run_job(job):
     began = {}      # clip id -> when work on it started
 
     def make(clip, words_now):
+        # A long video is still downloading while its clips wait here. That wait is not the clip taking too long,
+        # so a clip's time only starts once its video is here (it used to run out before the download finished).
+        whole = src["type"] == "url" and not pieces and whole_video()
         began[clip["id"]] = time.time()
-        if src["type"] == "url" and (pieces or not whole_video()):
+        if src["type"] == "url" and not whole:
             _fetch_piece(job, clip, audio)
         if clip["status"] != "error" and clip.get("captions", True) and yt and yt[1].lower().startswith("en"):
             # The clip was found with YouTube's transcript. What is shown on screen comes from our own model,
@@ -676,6 +833,8 @@ def _run_job(job):
             yt = None
         job["transcript_from"] = "youtube" if yt else "own"
         job["lang"] = yt[1] if yt else ""          # the language spoken, when YouTube says (decides the captions)
+    if not yt:
+        yt = _whisper_transcript(job, d, audio[lo:hi], lo / 16000)
     if resuming:
         try:
             words = json.loads((d / "words.json").read_text(encoding="utf-8"))
@@ -757,12 +916,13 @@ def _run_job(job):
             c.update(id=f"clip{len(job['clips']) + 1:02d}", start=round(c["start"] + shift, 2),
                      end=round(c["end"] + shift, 2), style=o["style"], layout=o["layout"],
                      captions=o.get("captions", True), status="queued", version=0)
-            # Only the gameplay layout uses a webcam, so it is only looked for then, and only once: a
-            # stream with no webcam is not looked for again on every clip of it.
-            if o["layout"] == "gameplay" and face is False:
+            # The webcam is looked for when a layout uses it, or to keep the streamer's face in the clip; once,
+            # so a stream with no webcam is not looked for again on every clip of it.
+            if (o["layout"] in render.FACE_LAYOUTS or o.get("keep_face", True)) and face is False:
                 face = _facecam(job)
             if face:
                 c["facecam"] = face
+                c["layout"] = render.face_layout(c["layout"], face, o.get("keep_face", True))
             job["clips"].append(c)
             futures.append((renders.submit(ctx.bind(make), c, list(words)), c))
         job["ai"] = {"model": model, "tokens": tokens, "note": "", "log": notes[-5:]}

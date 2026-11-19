@@ -65,6 +65,34 @@ def _frames(path: str | Path, count: int = MAX_FRAMES) -> np.ndarray:
     return np.frombuffer(raw[:n * size], dtype=np.uint8).reshape(n, H, W)
 
 
+NEAR_SPAN = 60.0           # seconds around the frame the model was shown, for checking the box it proposed
+NEAR_SLIP = 0.25           # how far (as a part of the box) a snapped side may move from where the model put it
+
+
+def _frames_near(path: str | Path, count: int = MAX_FRAMES, span: float = NEAR_SPAN, at: float = 0.5) -> np.ndarray:
+    """Grey frames from about a minute around `at` (a part of the video), where the model's frame came from.
+
+    Over a whole long video a webcam picture changes nearly as much as the game: the light changes, the
+    person moves about, sits down, leans in. Over a minute it hardly moves while the game races on, which
+    is the difference that tells them apart. A short file (a live clip's piece) is used whole."""
+    dur = _duration(path)
+    if dur <= span * 1.5:
+        return _frames(path, count)
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-v", "error", "-ss", f"{min(max(0.0, dur * at - span / 2.0), max(0.0, dur - span)):.1f}", "-t", f"{span:.1f}",
+             "-i", str(path), "-vf", f"fps={count / span:.4f},scale={W}:{H},format=gray",
+             "-frames:v", str(count), "-f", "rawvideo", "-"],
+            capture_output=True, timeout=180)
+    except Exception:  # noqa: BLE001
+        return np.zeros((0, H, W), dtype=np.uint8)
+    raw = proc.stdout or b""
+    n = len(raw) // (W * H)
+    if n < 4:
+        return np.zeros((0, H, W), dtype=np.uint8)
+    return np.frombuffer(raw[:n * W * H], dtype=np.uint8).reshape(n, H, W)
+
+
 def _duration(path: str | Path) -> float:
     try:
         proc = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -195,14 +223,14 @@ def _overlap(a, box) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def _full_frame(path: str | Path) -> np.ndarray | None:
-    """One grey frame at full size, from the middle of the video: where the borders are measured."""
+def _full_frame(path: str | Path, at: float = 0.5) -> np.ndarray | None:
+    """One grey frame at full size, from `at` (the middle unless said): where the borders are measured."""
     w, h = _size(path)
     if not w or not h:
         return None
     try:
         raw = subprocess.run(
-            ["ffmpeg", "-v", "error", "-ss", f"{max(0.0, _duration(path) / 2.0):.1f}", "-i", str(path),
+            ["ffmpeg", "-v", "error", "-ss", f"{max(0.0, _duration(path) * at):.1f}", "-i", str(path),
              "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
             capture_output=True, timeout=120).stdout or b""
     except Exception:  # noqa: BLE001
@@ -219,12 +247,12 @@ def _best(profile: np.ndarray, approx: float, span: float) -> float:
     return float(lo + seg.argmax()) if len(seg) else float(approx)
 
 
-def _snap(path: str | Path, box, w: int, h: int, span: float = 0.0):
+def _snap(path: str | Path, box, w: int, h: int, span: float = 0.0, at: float = 0.5):
     """A box on the small grid, put onto the borders that are really in the picture.
 
     A border the small grid found is a pixel or two out; a box a model proposed can be a good part of the
     frame out, which is what `span` is for. A side within a hair of the frame's own edge is the edge."""
-    frame = _full_frame(path)
+    frame = _full_frame(path, at)
     if frame is None:
         return None
     fh, fw = frame.shape
@@ -264,9 +292,14 @@ def _corner(x0, y0, x1, y1, w, h) -> str:
     return "middle"
 
 
-def _finish(path: str | Path, found: dict, w: int, h: int, still: np.ndarray) -> dict | None:
-    """The box in source pixels, with how sure it is that this is really a camera."""
-    snapped = _snap(path, (found["x"], found["y"], found["x1"], found["y1"]), w, h)
+def _finish(path: str | Path, found: dict, w: int, h: int, still: np.ndarray, at: float = 0.5,
+            seen: bool = False) -> dict | None:
+    """The box in source pixels, with how sure it is that this is really a camera.
+
+    `seen`: the model said a person is in this box, and the box has already passed the check that it is not the
+    game. That is as sure as a still picture: a streamer who never stops moving (bouncing, shouting at the screen)
+    is still a webcam, though the picture is never calm enough for the measurement alone."""
+    snapped = _snap(path, (found["x"], found["y"], found["x1"], found["y1"]), w, h, at=at)
     if not snapped:
         return None
     x0, y0, x1, y1 = snapped
@@ -276,16 +309,16 @@ def _finish(path: str | Path, found: dict, w: int, h: int, still: np.ndarray) ->
     game = float(np.median(still))
     moving = float(np.median(inside)) if inside.size else 99.0
     # sure of it when the picture inside hardly moves while the game around it is racing
-    conf = "high" if moving <= max(3.0, 0.25 * game) else "low"
+    conf = "high" if seen or moving <= max(3.0, 0.25 * game) else "low"
     return {"x": int(round(x0)), "y": int(round(y0)), "w": int(round(x1 - x0)), "h": int(round(y1 - y0)),
             "corner": _corner(x0, y0, x1, y1, w, h), "score": found.get("score", 0.0), "conf": conf}
 
 
-def _frame_jpeg(path: str | Path, width: int = 768) -> bytes:
+def _frame_jpeg(path: str | Path, width: int = 768, at: float = 0.5) -> bytes:
     """One frame of the stream, small, as a JPEG: what a model is shown."""
     try:
         return subprocess.run(
-            ["ffmpeg", "-v", "error", "-ss", f"{max(0.0, _duration(path) / 2.0):.1f}", "-i", str(path),
+            ["ffmpeg", "-v", "error", "-ss", f"{max(0.0, _duration(path) * at):.1f}", "-i", str(path),
              "-frames:v", "1", "-vf", f"scale={width}:-2", "-pix_fmt", "yuvj420p", "-q:v", "4",
              "-f", "image2pipe", "-vcodec", "mjpeg", "-"],
             capture_output=True, timeout=120).stdout or b""
@@ -293,37 +326,110 @@ def _frame_jpeg(path: str | Path, width: int = 768) -> bytes:
         return b""
 
 
+ASK_AT = (0.5, 0.3, 0.7)   # the moments shown to the model, in turn, until it sees a webcam
+
+
 def _asked(path: str | Path, ask):
-    """One frame to the model: (did it look, its box as parts of the frame or None)."""
-    jpeg = _frame_jpeg(path)
-    if not jpeg:
-        return False, None
-    try:
-        answer = ask(jpeg) or {}
-    except Exception:  # noqa: BLE001 - a model that cannot look is not a failure
-        return False, None
-    return bool(answer.get("looked")), answer.get("box")
+    """Frames to the model, one moment at a time: (did it look, its box as parts of the frame or None, the moment).
+
+    One look is not enough: a model sometimes misses a webcam that is plainly there, and a stream may show a
+    full-screen camera or a "be right back" slate at that moment. So up to three moments are shown, and the
+    first that has a webcam is used. "No webcam" means it looked at all of them and found none."""
+    looked = False
+    for at in ASK_AT:
+        jpeg = _frame_jpeg(path, at=at)
+        if not jpeg:
+            continue
+        try:
+            answer = ask(jpeg) or {}
+        except Exception:  # noqa: BLE001 - a model that cannot look is not a failure
+            continue
+        looked = looked or bool(answer.get("looked"))
+        if answer.get("looked") and answer.get("box"):
+            return True, answer["box"], at
+    return looked, None, 0.5
 
 
-def _seen(path: str | Path, box, w: int, h: int, still: np.ndarray, light: np.ndarray) -> dict | None:
+def _seen(path: str | Path, box, w: int, h: int, still: np.ndarray, light: np.ndarray, at: float = 0.5) -> dict | None:
     """A box the model proposed, put onto the picture's real borders and checked like any other.
 
     A model reads a picture well but places a box roughly, and it can be wrong about the whole thing. So
     its box is only believed where the borders are really there and the picture inside really is still."""
     fx, fy, fw, fh = box
-    snapped = _snap(path, (fx * W, fy * H, (fx + fw) * W, (fy + fh) * H), w, h, span=0.12)
-    if not snapped:
+    # Judged over the minute the model looked at, not the whole video (see _frames_near).
+    near = _frames_near(path, at=at)
+    if len(near) >= 4:
+        still, light = _stillness(near), near.astype(np.float32).mean(axis=0)
+    game = float(np.median(still))
+    asked = (fx * w, fy * h, (fx + fw) * w, (fy + fh) * h)
+    shapes = []
+    # 1. the model's box put onto the real borders. A side the snapping moved far from where the model put
+    #    it found some other line (a road, a HUD bar): there the model's own side is kept.
+    snapped = _snap(path, (fx * W, fy * H, (fx + fw) * W, (fy + fh) * H), w, h, span=0.12, at=at)
+    if snapped:
+        shapes.append(tuple(snapped))
+        shapes.append(tuple(s if abs(s - a) <= NEAR_SLIP * (fw * w if i % 2 == 0 else fh * h) else a
+                            for i, (s, a) in enumerate(zip(snapped, asked))))
+    # 2. the still area around it: a webcam with no border line of its own is still the part that hardly moves
+    region = _still_region(still, box, game)
+    if region:
+        shapes.append(tuple(v * (w / W if i % 2 == 0 else h / H) for i, v in enumerate(region)))
+    # 3. the model's own box, as it said
+    shapes.append(asked)
+    good = []
+    for x0, y0, x1, y1 in shapes:
+        x0, y0, x1, y1 = max(0.0, x0), max(0.0, y0), min(float(w), x1), min(float(h), y1)
+        if x1 - x0 < w * MIN_SIZE or y1 - y0 < h * MIN_SIZE:
+            continue
+        small = (x0 * W / w, y0 * H / h, x1 * W / w, y1 * H / h)
+        # The model has already said a person is here, so the picture inside is allowed to move more than a
+        # measured box would be; what it may not be is the game itself.
+        moving = _plausible(*small, still, light, game, share=1.0)
+        if moving is None:
+            continue
+        good.append(((small[2] - small[0]) * (small[3] - small[1]), moving, small))
+    if not good:
         return None
-    x0, y0, x1, y1 = snapped
-    if x1 - x0 < w * MIN_SIZE or y1 - y0 < h * MIN_SIZE:
-        return None
-    small = (x0 * W / w, y0 * H / h, x1 * W / w, y1 * H / h)
-    # The model has already said a person is here, so the picture inside is allowed to move more than a
-    # measured box would be; what it may not be is the game itself.
-    if _plausible(*small, still, light, float(np.median(still)), share=1.0) is None:
-        return None
+    # Of the boxes big enough to be the whole webcam (at least half the biggest), the calmest: a box that runs
+    # over the webcam's edge takes in some of the game, and the game is what moves.
+    biggest = max(a for a, _, _ in good)
+    small = min((g for g in good if g[0] >= 0.5 * biggest), key=lambda g: g[1])[2]
     found = {"x": small[0], "y": small[1], "x1": small[2], "y1": small[3], "score": 0.0}
-    return _finish(path, found, w, h, still)
+    return _finish(path, found, w, h, still, at=at, seen=True)
+
+
+def _still_region(still: np.ndarray, box, game: float):
+    """The run of still rows and columns that holds the middle of the model's box (on the small grid), or None.
+
+    Columns are judged on the box's rows and rows on its columns, out to its own size again on every side, so
+    a rough box grows to the whole still picture around it and no further."""
+    fx, fy, fw, fh = box
+    cut = max(STILL_MIN, STILL_FRAC * game)
+    mask = still < cut
+
+    def run(frac, lo, centre):
+        ok = frac > 0.6
+        c = int(centre) - lo
+        if not (0 <= c < len(ok)) or not ok[c]:
+            return None
+        a = b = c
+        while a > 0 and ok[a - 1]:
+            a -= 1
+        while b < len(ok) - 1 and ok[b + 1]:
+            b += 1
+        return lo + a, lo + b + 1
+
+    x0, x1 = max(0, int((fx - fw) * W)), min(W, int((fx + 2 * fw) * W))
+    y0, y1 = max(0, int((fy - fh) * H)), min(H, int((fy + 2 * fh) * H))
+    rx0, rx1 = max(0, int(fx * W)), min(W, max(int(fx * W) + 1, int((fx + fw) * W)))
+    ry0, ry1 = max(0, int(fy * H)), min(H, max(int(fy * H) + 1, int((fy + fh) * H)))
+    if x1 <= x0 or y1 <= y0:
+        return None
+    cols = run(mask[ry0:ry1, x0:x1].mean(axis=0), x0, (fx + fw / 2) * W)
+    rows = run(mask[y0:y1, rx0:rx1].mean(axis=1), y0, (fy + fh / 2) * H)
+    if not cols or not rows:
+        return None
+    return float(cols[0]), float(rows[0]), float(cols[1]), float(rows[1])
 
 
 def detect(path: str | Path, ask=None) -> dict | None:
@@ -344,24 +450,51 @@ def detect(path: str | Path, ask=None) -> dict | None:
         return None
     still = _stillness(frames)
     light = frames.astype(np.float32).mean(axis=0)
-    looked, hinted = (False, None)
-    if ask is not None:
-        looked, hinted = _asked(path, ask)
-        if looked and not hinted:
-            return None                    # it looked, and there is no webcam on this stream
     vx, hy = _profiles(frames)
     vpeaks, hpeaks = _peaks(vx, 40), _peaks(hy, 40)
     found = _local(vpeaks, hpeaks, still, light) if (vpeaks and hpeaks) else []
-    if looked and hinted:
-        # The model is better than any measurement at saying "that is a person", and worse at saying
-        # exactly where the lines are. So it picks which of the measured boxes it is, and only if it
-        # matches none of them is its own box measured and used.
-        match = max(found, key=lambda c: _overlap(c, hinted)) if found else None
-        if match and _overlap(match, hinted) >= MATCH:
-            return _finish(path, match, w, h, still)
-        seen = _seen(path, hinted, w, h, still, light)
-        if seen:
-            return seen
+    if ask is not None:
+        looked = pointed = False
+        # One moment at a time (see ASK_AT). A box the model gives that does not hold up is not the end: the
+        # next moment is asked too, since a model that placed the box badly once often places it well again.
+        for at in ASK_AT:
+            jpeg = _frame_jpeg(path, at=at)
+            if not jpeg:
+                continue
+            try:
+                answer = ask(jpeg) or {}
+            except Exception:  # noqa: BLE001 - a model that cannot look is not a failure
+                continue
+            looked = looked or bool(answer.get("looked"))
+            hinted = answer.get("box") if answer.get("looked") else None
+            if not hinted:
+                continue
+            pointed = True
+            # The model is better than any measurement at saying "that is a person", and worse at saying
+            # exactly where the lines are. So it picks which of the measured boxes it is, and only if it
+            # matches none of them is its own box measured and used.
+            match = max(found, key=lambda c: _overlap(c, hinted)) if found else None
+            if match and _overlap(match, hinted) >= MATCH:
+                return _finish(path, match, w, h, still)
+            for box in _box_variants(hinted):
+                seen = _seen(path, box, w, h, still, light, at=at)
+                if seen:
+                    return seen
+        if looked and not pointed:
+            return None                    # it looked at every moment, and there is no webcam on this stream
     if not found:
         return None
     return _finish(path, found[0], w, h, still)
+
+
+def _box_variants(box) -> list:
+    """The model's box, and for a box that runs most of the frame's height (or width), its thirds along that side
+    as well. A model sometimes marks the whole column a webcam sits in (top to bottom of the frame) when the
+    webcam is only its top corner; the third that holds the webcam then grows to its real size in _seen."""
+    fx, fy, fw, fh = box
+    out = [box]
+    if fh >= 0.6:
+        out += [(fx, fy + k * fh / 3, fw, fh / 3) for k in range(3)]
+    if fw >= 0.6:
+        out += [(fx + k * fw / 3, fy, fw / 3, fh) for k in range(3)]
+    return out

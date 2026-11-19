@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from . import admin as admins
 from . import account, load
-from . import (accounts, ai, alerts, auth, config, creators, ctx, db, jobs, live, media, posting,
+from . import (accounts, ai, alerts, auth, brain, config, creators, ctx, db, jobs, live, media, posting,
                profiles, render, safe, transcribe, usage)
 
 from . import tools as _tools  # noqa: E402
@@ -943,6 +943,38 @@ def rerender(jid: str, cid: str, body: dict = Body(...)):
     return jobs.public(job)
 
 
+@app.post("/api/jobs/{jid}/clips/{cid}/ask")
+def remake_from_request(jid: str, cid: str, body: dict = Body(...)):
+    """Re-make a clip from a request in plain words: the AI turns it into new times, text or style."""
+    job = _job_or_404(jid)
+    clip = next((c for c in job["clips"] if c["id"] == cid), None)
+    if not clip:
+        raise HTTPException(404, "No such clip")
+    if job["status"] in ("queued", "running") or clip.get("status") in ("queued", "rendering"):
+        raise HTTPException(409, "This clip is still being made. Try again when it has finished.")
+    if not config.ai_ready():
+        raise HTTPException(400, "Set up an AI in Settings, AI first.")
+    _throttle("render:" + ctx.uid(), 20, 600, "That's a lot of re-makes in a short time. Wait a few minutes.")
+    try:
+        words = json.loads((Path(job["dir"]) / "words.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        words = []
+    try:
+        changes, summary = brain.revise_clip(clip, words, body.get("request"), float(job.get("duration") or 0),
+                                             list(render.STYLES), list(render.LAYOUTS), job.get("title", ""),
+                                             job.get("uploader", ""), min_len=5.0)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"The AI could not work out the changes. {ai.explain(e) or safe.friendly(e, 200)}")
+    if changes:
+        try:
+            jobs.request_render(jid, cid, changes)
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, str(e))
+    return {"summary": summary, "changes": changes, "job": jobs.public(job)}
+
+
 @app.delete("/api/jobs/{jid}")
 def delete_job(jid: str):
     job = _job_or_404(jid)
@@ -1024,7 +1056,7 @@ def delete_my_account(request: Request, body: dict = Body(...)):
 
 @app.get("/media/{jid}/{name}")
 def media_file(jid: str, name: str, download: int = 0):
-    if not re.fullmatch(r"[\w\-]+\.(mp4|jpg)", name):
+    if not re.fullmatch(r"[\w\-]+\.(mp4|jpg|srt)", name):
         raise HTTPException(404)
     f = Path(_job_or_404(jid)["dir"]) / "clips" / name
     if not f.is_file():
@@ -1455,7 +1487,10 @@ def add_posts(body: dict = Body(...)):
     clip = next((c for c in job["clips"] if c["id"] == body.get("clip")), None) if job else None
     if not clip or clip.get("status") != "done":
         raise HTTPException(404, "That clip is not ready")
-    made = posting.enqueue(job, clip, [str(a) for a in body.get("accounts", [])][:20], now=bool(body.get("now")))
+    yt = body.get("yt_format")
+    if yt is not None and yt not in posting.YT_FORMATS:
+        raise HTTPException(400, "Choose Short or Normal video for YouTube.")
+    made = posting.enqueue(job, clip, [str(a) for a in body.get("accounts", [])][:20], now=bool(body.get("now")), yt_format=yt)
     if not made:
         raise HTTPException(400, "Nothing was queued. Pick at least one account this clip has not already gone to.")
     return {"queued": len(made)}

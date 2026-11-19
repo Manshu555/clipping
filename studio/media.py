@@ -98,9 +98,14 @@ class _Quiet:
 def _ydl(opts):
     import yt_dlp
     # a channel or playlist link is answered as "a list" straight away, never walked video by video
+    # On Windows a file that was just written is often held for a moment (the virus scanner looks at it), and
+    # renaming it then fails with "Access is denied". yt-dlp's own wait is three tries a hundredth of a second
+    # apart, which a long stream (hundreds of pieces, four at a time) is all but sure to run out of. So it waits
+    # longer and more often: up to 20 tries, 0.1 s growing to 2 s apart.
     return yt_dlp.YoutubeDL({"noplaylist": True, "quiet": True, "no_warnings": True, "logger": _Quiet(),
                              "extract_flat": "in_playlist", "playlistend": 1, "socket_timeout": 20,
-                             "concurrent_fragment_downloads": 4, **opts})
+                             "concurrent_fragment_downloads": 4, "file_access_retries": 20,
+                             "retry_sleep_functions": {"file_access": lambda n: min(2.0, 0.1 * 2 ** n)}, **opts})
 
 
 def _video_format(height):
