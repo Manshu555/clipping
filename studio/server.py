@@ -1487,10 +1487,18 @@ def add_posts(body: dict = Body(...)):
     clip = next((c for c in job["clips"] if c["id"] == body.get("clip")), None) if job else None
     if not clip or clip.get("status") != "done":
         raise HTTPException(404, "That clip is not ready")
+    if body.get("master"):
+        made = posting.enqueue_all(job, clip, now=True)
+        if not made:
+            raise HTTPException(400, "Nothing was queued. Check that your accounts are connected.")
+        return {"queued": len(made)}
     yt = body.get("yt_format")
     if yt is not None and yt not in posting.YT_FORMATS:
         raise HTTPException(400, "Choose Short or Normal video for YouTube.")
-    made = posting.enqueue(job, clip, [str(a) for a in body.get("accounts", [])][:20], now=bool(body.get("now")), yt_format=yt)
+    ig = body.get("ig_format", "reel")
+    if ig not in posting.IG_FORMATS:
+        ig = "reel"
+    made = posting.enqueue(job, clip, [str(a) for a in body.get("accounts", [])][:20], now=bool(body.get("now")), yt_format=yt, ig_format=ig)
     if not made:
         raise HTTPException(400, "Nothing was queued. Pick at least one account this clip has not already gone to.")
     return {"queued": len(made)}

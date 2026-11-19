@@ -21,6 +21,7 @@ def _mine() -> list:
     return [p for p in _posts if p.get("user") == u]
 OPEN = ("scheduled", "posting")
 YT_FORMATS = ("short", "video")
+IG_FORMATS = ("reel", "story", "both")
 
 
 def _save():
@@ -49,7 +50,7 @@ def _mirror(p):
     job = jobs.get(p["job"])
     clip = next((c for c in job["clips"] if c["id"] == p["clip"]), None) if job else None
     if clip is not None:
-        clip.setdefault("posts", {})[p["id"]] = {k: p.get(k) for k in ("account_name", "platform", "status", "url", "due_at", "error", "yt_format")}
+        clip.setdefault("posts", {})[p["id"]] = {k: p.get(k) for k in ("account_name", "platform", "status", "url", "due_at", "error", "yt_format", "ig_format", "format")}
         jobs.save(job)
 
 
@@ -65,33 +66,62 @@ def _next_slot(account_id, gap_min, cap):
     return t
 
 
-def enqueue(job, clip, account_ids, now=False, yt_format=None) -> list:
+def enqueue(job, clip, account_ids, now=False, yt_format=None, ig_format="reel") -> list:
     """`yt_format` is how a clip goes to YouTube: "short" (vertical, a Short) or "video" (a normal 16:9 video).
-    Left out, the creator's choice is used, and a Short when there is none."""
+    `ig_format` is how a clip goes to Instagram: "reel", "story", or "both"."""
     c = creators.get(job["creator"]) or creators.DEFAULTS
     yt_format = yt_format if yt_format in YT_FORMATS else (c.get("yt_format") if c.get("yt_format") in YT_FORMATS else "short")
+    ig_format = ig_format if ig_format in IG_FORMATS else "reel"
     made = []
     with _lock:
         for aid in account_ids:
             acc = accounts.get(aid)
             if not acc:
                 continue
-            fmt = yt_format if acc["platform"] == "youtube" else None
-            if any(p["job"] == job["id"] and p["clip"] == clip["id"] and p["account"] == aid
-                   and (p.get("yt_format") or ("short" if p.get("platform") == "youtube" else None)) == fmt
-                   and p["status"] in OPEN + ("posted",) for p in _mine()):
-                continue  # never post the same clip to the same account twice (a Short and a normal video are two)
-            due = time.time() if now else _next_slot(aid, c["post_gap_min"], c["daily_cap"])
-            p = {"id": secrets.token_hex(8), "user": ctx.uid(), "job": job["id"], "clip": clip["id"], "creator": job["creator"],
-                 "account": aid, "account_name": acc["name"], "platform": acc["platform"], "status": "scheduled",
-                 "due_at": due, "created": time.time(), "title": clip.get("title") or clip.get("hook") or "Clip",
-                 "score": clip.get("score", 0), "tries": 0,
-                 "yt_format": fmt, "url": "", "remote_id": "", "error": None, "views": None}
-            _posts.append(p)
-            made.append(p)
+            if acc["platform"] == "youtube":
+                formats = [yt_format]
+            elif acc["platform"] == "instagram":
+                formats = ["reel", "story"] if ig_format == "both" else [ig_format]
+            else:
+                formats = [None]
+            for fmt in formats:
+                if any(p["job"] == job["id"] and p["clip"] == clip["id"] and p["account"] == aid
+                       and (p.get("format") or p.get("yt_format") or ("short" if p.get("platform") == "youtube" else "reel")) == fmt
+                       and p["status"] in OPEN + ("posted",) for p in _mine()):
+                    continue  # never post the same clip to the same account and format twice
+                due = time.time() if now else _next_slot(aid, c["post_gap_min"], c["daily_cap"])
+                acc_label = f"{acc['name']} (Story)" if fmt == "story" else (f"{acc['name']} (Short)" if fmt == "short" and acc["platform"] == "youtube" else acc["name"])
+                p = {"id": secrets.token_hex(8), "user": ctx.uid(), "job": job["id"], "clip": clip["id"], "creator": job["creator"],
+                     "account": aid, "account_name": acc_label, "platform": acc["platform"], "status": "scheduled",
+                     "due_at": due, "created": time.time(), "title": clip.get("title") or clip.get("hook") or "Clip",
+                     "score": clip.get("score", 0), "tries": 0,
+                     "yt_format": fmt if acc["platform"] == "youtube" else None,
+                     "ig_format": fmt if acc["platform"] == "instagram" else None,
+                     "format": fmt, "url": "", "remote_id": "", "error": None, "views": None}
+                _posts.append(p)
+                made.append(p)
         _save()
     for p in made:
         _mirror(p)
+    return made
+
+
+def enqueue_all(job, clip, now=True) -> list:
+    """Master Key: Queues the clip everywhere at once: YouTube Short + Instagram Reel + Instagram Story + TikTok."""
+    all_accs = accounts.list_accounts()
+    made = []
+    # 1. YouTube Short
+    yt_accs = [a["id"] for a in all_accs if a["platform"] == "youtube"]
+    if yt_accs:
+        made += enqueue(job, clip, yt_accs, now=now, yt_format="short")
+    # 2. Instagram Reel + Story
+    ig_accs = [a["id"] for a in all_accs if a["platform"] == "instagram"]
+    if ig_accs:
+        made += enqueue(job, clip, ig_accs, now=now, ig_format="both")
+    # 3. TikTok
+    tt_accs = [a["id"] for a in all_accs if a["platform"] == "tiktok"]
+    if tt_accs:
+        made += enqueue(job, clip, tt_accs, now=now)
     return made
 
 
@@ -138,6 +168,8 @@ def _post(p):
                                                creator["privacy"], short=False)
         elif acc["platform"] == "youtube":
             rid, url = accounts.youtube_upload(acc, path, title, cap + "\n\n#Shorts", clip.get("hashtags", []), creator["privacy"])
+        elif acc["platform"] == "instagram" and p.get("format") == "story":
+            rid, url = accounts.instagram_story_upload(acc, path, job["id"])
         elif acc["platform"] == "instagram":
             rid, url = accounts.instagram_upload(acc, path, cap, job["id"])
         elif acc["platform"] == "tiktok":

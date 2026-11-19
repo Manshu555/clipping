@@ -2176,7 +2176,15 @@ function drawClipDlg(full) {
           ${S.accounts.some(a => a.platform === "youtube") ? `<label class="f">On YouTube, post it as<select id="ytfmt">
             <option value="short">A Short (vertical, as made)</option>
             <option value="video">A normal video (16:9, made when it is posted)</option></select></label>` : ""}
-          <div class="row"><button class="btn primary" data-act="postnow">${ic("send")}Post now</button><button class="btn" data-act="postqueue">Add to queue</button></div>`
+          ${S.accounts.some(a => a.platform === "instagram") ? `<label class="f">On Instagram, post as<select id="igfmt">
+            <option value="both">Both (Reel + Story)</option>
+            <option value="reel">Reel only</option>
+            <option value="story">Story only</option></select></label>` : ""}
+          <div class="row" style="gap:8px;flex-wrap:wrap">
+            <button class="btn primary" data-act="postnow">${ic("send")}Post now</button>
+            <button class="btn" data-act="postqueue">Add to queue</button>
+            <button class="btn" data-act="masterpost" style="background:linear-gradient(135deg,#ff0050,#833ab4,#fd1d1d);color:#fff;font-weight:700;border:none;">${ic("bolt")} Master Post (YT Short + Reel + Story)</button>
+          </div>`
           : `<p class="help">No accounts connected yet. Connect one in Settings.</p>`}
         <div class="row" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line)">
           ${c.status === "done" ? `<a class="btn" href="${m}${esc(c.file)}?download=1">${ic("down")}Download</a>` : ""}
@@ -2501,12 +2509,20 @@ document.addEventListener("click", async e => {
       } catch (err) { msg.textContent = ""; throw err; }
       finally { if (b.isConnected) { b.disabled = false; b.innerHTML = was; } }
     }
+    if (a === "masterpost") {
+      if (!await ask("Master Post?", "Post this clip to YouTube Shorts + Instagram Reel + Instagram Story immediately?", "Post everywhere")) return;
+      b.disabled = true;
+      const res = await send("/api/posts", {job:D.jid, clip:D.cid, master:true});
+      toast(`Master Post: Queued to ${res.queued} destination${res.queued > 1 ? "s" : ""}!`, "ok");
+      return tick();
+    }
     if (a === "postnow" || a === "postqueue") {
       const accs = $$("#clipdlg [data-pacc]:checked").map(i => i.value);
       if (!accs.length) return toast("Tick at least one account first.", "bad");
       if (a === "postnow" && !await ask("Post now?", `This clip goes to ${accs.length} account${accs.length > 1 ? "s" : ""} straight away.`, "Post now")) return;
       const yt = $("#ytfmt")?.value;
-      await send("/api/posts", {job:D.jid, clip:D.cid, accounts:accs, now:a === "postnow", ...(yt ? {yt_format:yt} : {})});
+      const ig = $("#igfmt")?.value;
+      await send("/api/posts", {job:D.jid, clip:D.cid, accounts:accs, now:a === "postnow", ...(yt ? {yt_format:yt} : {}), ...(ig ? {ig_format:ig} : {})});
       toast(a === "postnow" ? "Posting now" : "Added to the queue", "ok"); return tick();
     }
   } catch (err) { b.disabled = false; toast(err.message, "bad"); }

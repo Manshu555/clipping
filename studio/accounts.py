@@ -481,6 +481,38 @@ def instagram_upload(acc, path: Path, caption: str, job_id: str = ""):
     return pub["id"], link
 
 
+def instagram_story_upload(acc, path: Path, job_id: str = ""):
+    """An Instagram Story (24-hour). 9:16 vertical video up to 60s."""
+    token = _ig_token(acc)
+    auth = {"Authorization": f"Bearer {token}"}
+    uid = acc["user_id"]
+    if config.PUBLIC_URL.startswith("https://") and job_id:
+        box = _check(httpx.post(f"{IG_FB}/{uid}/media", data={"media_type": "STORIES", "video_url": clip_link(job_id, path.name)},
+                                headers=auth, timeout=60), "Starting the Instagram Story").json()
+    else:
+        box = _check(httpx.post(f"{IG_FB}/{uid}/media", data={"media_type": "STORIES", "upload_type": "resumable"},
+                                headers=auth, timeout=60), "Starting the Instagram Story upload").json()
+        with path.open("rb") as f:
+            _check(httpx.post(f"{IG_UPLOAD}/{box['id']}", content=f.read(),
+                              headers={"Authorization": f"OAuth {token}", "offset": "0",
+                                       "file_size": str(path.stat().st_size)}, timeout=900),
+                   "Uploading to Instagram Story")
+    for _ in range(90):
+        st = _check(httpx.get(f"{IG_FB}/{box['id']}", params={"fields": "status_code,status"}, headers=auth, timeout=30),
+                    "Checking the Instagram Story upload").json()
+        if st.get("status_code") in ("FINISHED", "PUBLISHED"):
+            break
+        if st.get("status_code") in ("ERROR", "EXPIRED"):
+            raise RuntimeError(f"Instagram rejected the Story: {st.get('status', st['status_code'])}")
+        time.sleep(6)
+    else:
+        raise RuntimeError("Instagram took too long to process the Story.")
+    pub = _check(httpx.post(f"{IG_FB}/{uid}/media_publish", data={"creation_id": box["id"]}, headers=auth, timeout=60),
+                 "Publishing on Instagram Story").json()
+    username = acc["name"].lstrip("@")
+    return pub["id"], f"https://www.instagram.com/stories/{username}/"
+
+
 def instagram_views(acc, media_id: str):
     r = httpx.get(f"{IG_FB}/{media_id}/insights", params={"metric": "views"},
                   headers={"Authorization": f"Bearer {_ig_token(acc)}"}, timeout=30)
