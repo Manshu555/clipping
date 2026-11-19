@@ -285,7 +285,7 @@ def _own_address(host: str) -> bool:
     import ipaddress
     name = host.strip().lower()
     name = name[1:name.index("]")] if name.startswith("[") and "]" in name else name.rsplit(":", 1)[0] if ":" in name else name
-    if name in ("localhost", urlparse(config.PUBLIC_URL).hostname or "") or name.endswith(".localhost"):
+    if name in ("localhost", urlparse(config.PUBLIC_URL).hostname or "") or name.endswith(".localhost") or name.endswith(".trycloudflare.com"):
         return True
     try:
         ipaddress.ip_address(name)
@@ -1401,8 +1401,8 @@ def connect_callback(platform: str, code: str = "", state: str = "", error: str 
     return _back(connected=platform, name=acc["name"])
 
 
-@app.get("/pub/{token}.mp4")
-def public_clip(token: str):
+@app.api_route("/pub/{token}.mp4", methods=["GET", "HEAD"])
+def public_clip(token: str, request: Request):
     """A clip for a platform to fetch while posting it: one clip, one hour, signed (see accounts.clip_link)."""
     got = accounts.read_clip_link(token)
     if not got:
@@ -1413,6 +1413,13 @@ def public_clip(token: str):
         f = Path(job["dir"]) / "clips" / name if job else None
     if not f or not f.is_file():
         raise HTTPException(404)
+    if request.method == "HEAD":
+        return Response(status_code=200, headers={
+            "Content-Type": "video/mp4",
+            "Content-Length": str(f.stat().st_size),
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, no-store",
+        })
     return FileResponse(f, media_type="video/mp4", headers={"Cache-Control": "private, no-store"})
 
 

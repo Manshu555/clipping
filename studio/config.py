@@ -152,8 +152,27 @@ def user_dir(uid: str) -> Path:
 # ---------------------------------------------------------------- the site
 HOST = env("PEAKCUT_HOST", "127.0.0.1")
 PORT = int(env("PEAKCUT_PORT") or "8765")
-PUBLIC_URL = (env("PEAKCUT_PUBLIC_URL") or f"http://127.0.0.1:{PORT}").rstrip("/")   # e.g. https://peakcut.com
-HTTPS = PUBLIC_URL.startswith("https://")
+
+
+def public_url() -> str:
+    val = env("PEAKCUT_PUBLIC_URL")
+    tlog = ROOT / "tunnel.log"
+    if tlog.exists():
+        try:
+            m = re.findall(r"https://[a-zA-Z0-9\-]+\.trycloudflare\.com", tlog.read_text(encoding="utf-8", errors="ignore"))
+            if m:
+                val = m[-1]
+        except Exception:
+            pass
+    return (val or f"http://127.0.0.1:{PORT}").rstrip("/")
+
+
+def __getattr__(name: str):
+    if name == "PUBLIC_URL":
+        return public_url()
+    if name == "HTTPS":
+        return public_url().startswith("https://")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 SESSION_DAYS = int(env("PEAKCUT_SESSION_DAYS", "30"))
 # Accounts are off by default: PeakCut opens straight into the dashboard, with no sign-in, which is what you want
 # on your own computer. On a server that other people can reach, set PEAKCUT_ACCOUNTS=1: everyone then signs up
