@@ -260,13 +260,13 @@ def _filter(layout, fg_h, facecam=None):
         # the webcam usually sits in.
         fx, fy, fw, fh = (int(v) for v in facecam)
         top, bottom = fg_h, H - fg_h
-        return (f"[0:v]fps={config.OUT_FPS},split=2[g][f];"
+        return (f"[0:v]setpts=PTS-STARTPTS,fps={config.OUT_FPS},split=2[g][f];"
                 f"[f]crop={fw}:{fh}:{fx}:{fy},scale={W}:{top}:force_original_aspect_ratio=increase,crop={W}:{top},setsar=1[ft];"
                 f"[g]scale={W}:{bottom}:force_original_aspect_ratio=increase,crop={W}:{bottom},setsar=1[gb];"
                 f"[ft][gb]vstack=inputs=2[v0];")
     if layout == "wide":
         # a normal (not Short) video: the whole picture, 16:9, with black bars only if the source is another shape
-        return (f"[0:v]fps={config.OUT_FPS},scale={WIDE_W}:{WIDE_H}:force_original_aspect_ratio=decrease,"
+        return (f"[0:v]setpts=PTS-STARTPTS,fps={config.OUT_FPS},scale={WIDE_W}:{WIDE_H}:force_original_aspect_ratio=decrease,"
                 f"pad={WIDE_W}:{WIDE_H}:(ow-iw)/2:(oh-ih)/2,setsar=1[v0];")
     if layout == "gameplay" and facecam:
         # The game fills the screen, and the webcam sits in the top corner of it, so a viewer sees
@@ -274,13 +274,13 @@ def _filter(layout, fg_h, facecam=None):
         fx, fy, fw, fh = (int(v) for v in facecam)
         if fw > 8 and fh > 8:
             pip_h = max(2, int(round(PIP_W * fh / fw)))
-            return (f"[0:v]fps={config.OUT_FPS},split=2[base][fc];"
+            return (f"[0:v]setpts=PTS-STARTPTS,fps={config.OUT_FPS},split=2[base][fc];"
                     f"[base]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[b];"
                     f"[fc]crop={fw}:{fh}:{fx}:{fy},scale={PIP_W}:{pip_h},setsar=1[p];"
                     f"[b][p]overlay={W - PIP_W - PIP_MARGIN}:{PIP_MARGIN}[v0];")
     if layout == "crop" or (layout == "gameplay" and not facecam):
-        return f"[0:v]fps={config.OUT_FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v0];"
-    return (f"[0:v]fps={config.OUT_FPS},split=2[a][b];"
+        return f"[0:v]setpts=PTS-STARTPTS,fps={config.OUT_FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v0];"
+    return (f"[0:v]setpts=PTS-STARTPTS,fps={config.OUT_FPS},split=2[a][b];"
             f"[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,"
             f"scale={W}:{H},eq=brightness=-0.14:saturation=1.15[bg];"
             f"[b]scale={W}:{fg_h}:force_original_aspect_ratio=increase,crop={W}:{fg_h}[fg];"
@@ -337,8 +337,10 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
         shutil.copyfile(f, work / "f" / f.name)
     fc = _filter(layout, fg_h, face) + f"[v0]ass={name}.ass:fontsdir=f[v]"
     base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", str(src),
-            "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
-            "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]
+            "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0",
+            "-af", "asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0,loudnorm=I=-14:TP=-1.5:LRA=11",
+            "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart",
+            "-avoid_negative_ts", "make_zero", "-pix_fmt"]
     encoders = []
     if _qsv_ok is not False:
         encoders.append(("qsv", ["nv12", "-c:v", "h264_qsv", "-global_quality", "23", "-preset", "fast"]))
