@@ -127,14 +127,27 @@ def enqueue_all(job, clip, now=True) -> list:
 
 def on_clip_ready(job, clip):
     """Called once when a clip first finishes rendering."""
-    c = creators.get(job["creator"])
-    if not c or not c["autopost"] or not c["accounts"]:
-        return
-    if clip.get("score", 0) < c["post_min_score"]:
+    u = job.get("user") or "u_local"
+    c = creators.get(job.get("creator"))
+    min_score = c.get("post_min_score", 50) if c else 50
+    if clip.get("score", 0) < min_score:
         return  # includes hand-made clips (score 0): those wait for you to press Post
-    made = enqueue(job, clip, c["accounts"])
-    if made:
-        creators.log(c["id"], f"Queued for {len(made)} account(s): {clip.get('title') or clip.get('hook')}")
+
+    with ctx.as_user(u):
+        st = accounts.settings()
+        if st.get("paused"):
+            return
+        auto_master = st.get("auto_master_post", True)
+        if auto_master:
+            made = enqueue_all(job, clip, now=True)
+            if made:
+                tag = (c and c.get("id")) or "system"
+                creators.log(tag, f"⚡ Auto Master-Posted ({len(made)} destinations): {clip.get('title') or clip.get('hook')}")
+                return
+        if c and c.get("autopost") and c.get("accounts"):
+            made = enqueue(job, clip, c["accounts"])
+            if made:
+                creators.log(c["id"], f"Queued for {len(made)} account(s): {clip.get('title') or clip.get('hook')}")
 
 
 def _caption(clip, creator):

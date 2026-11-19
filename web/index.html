@@ -2130,12 +2130,23 @@ async function drawSettings() {
         return `<div class="appcard"><span class="applogo" style="background:${bg}">${logo}</span>
           <div class="apptx"><b>${name}</b><span>${desc}</span>${listOf(accs)}</div><div class="appact">${act}</div>${panel}</div>`;
       };
+      const curSet = await api("/api/settings").catch(() => ({}));
       body.innerHTML = `<section class="set-sec"><h2>Connected apps</h2><p class="help">Connect the accounts PeakCut posts clips to: press Connect, sign in on the platform's own page, and you're back here. PeakCut never sees your passwords. Then pick which accounts each creator posts to, in that creator's Setup.</p>
         <div class="apps">
           ${card("youtube", "YouTube", yt, "#FF0000", "Post clips to your channel as Shorts or normal videos.")}
           ${card("instagram", "Instagram", ig, "linear-gradient(45deg,#F58529,#DD2A7B,#8134AF)", "Post clips as Reels. Needs a Creator or Business account.")}
           ${card("tiktok", "TikTok", tt, "#000", "Post clips straight to your TikTok.")}
-        </div></section>`;
+        </div>
+        <div class="card" style="margin-top:20px;padding:16px;background:var(--bg2);border-radius:10px;border:1px solid var(--border)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:16px">
+            <div>
+              <b style="font-size:15px;display:flex;align-items:center;gap:6px">⚡ Auto Master Post (Direct Upload)</b>
+              <span class="sub" style="display:block;margin-top:4px">Directly upload clips to YouTube Shorts + Instagram Reels + Stories as soon as they finish rendering, without waiting for approval.</span>
+            </div>
+            <label class="sw"><input type="checkbox" id="set_auto_master" ${curSet.auto_master_post !== false ? "checked" : ""} data-act="toggle_auto_master">Auto-upload</label>
+          </div>
+        </div>
+      </section>`;
     }
   } catch (e) { body.innerHTML = `<div class="set-load">${esc(e.message)}</div>`; }
 }
@@ -2477,6 +2488,12 @@ document.addEventListener("click", async e => {
     if (a === "csave") return void await saveCreator();
     if (a === "cdiscard") { drawCreatorForm(); return toast("Changes discarded"); }
     if (a === "pause") { await send("/api/settings", {paused:!S.overview.paused}, "PUT"); return loadOverview(); }
+    if (a === "toggle_auto_master") {
+      const checked = $("#set_auto_master")?.checked ?? true;
+      await send("/api/settings", {auto_master_post: checked}, "PUT");
+      toast(checked ? "Auto Master-Post enabled: new clips will be uploaded directly" : "Auto Master-Post disabled", "ok");
+      return;
+    }
     if (a === "pcancel" || a === "pretry") { await api(`/api/posts/${d.id}/${a === "pcancel" ? "cancel" : "retry"}`, {method:"POST"}); return loadOverview(); }
     if (a === "ssave") { await saveSettings(); toast("Saved", "ok"); return drawSettings(); }
     if (a === "plansave") {
