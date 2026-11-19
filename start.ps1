@@ -1,24 +1,63 @@
-# start.ps1 - Starts PeakCut Server + Cloudflare Tunnel
+# start.ps1 - Starts Ollama AI + Cloudflare Tunnel + PeakCut Server
 $ErrorActionPreference = "Continue"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $Root
 
-Write-Host "`n===============================================" -ForegroundColor Cyan
-Write-Host "         Starting PeakCut Studio & Tunnel        " -ForegroundColor Cyan
-Write-Host "===============================================`n" -ForegroundColor Cyan
+Write-Host "`n=======================================================" -ForegroundColor Cyan
+Write-Host "     Starting PeakCut Studio + Ollama + Tunnel        " -ForegroundColor Cyan
+Write-Host "=======================================================`n" -ForegroundColor Cyan
 
-# 1. Clean up any existing instances on port 8765 or old cloudflared
+# 0. Clean up any existing instances on port 8765 or old cloudflared
 $oldPort = Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
 foreach ($pid_ in $oldPort) {
     if ($pid_ -gt 0) { Stop-Process -Id $pid_ -Force -ErrorAction SilentlyContinue }
 }
 Stop-Process -Name "cloudflared" -Force -ErrorAction SilentlyContinue
 
+# 1. Start Ollama AI if not running
+$ollamaRunning = $false
+try {
+    $resp = Invoke-RestMethod -Uri "http://127.0.0.1:11434" -TimeoutSec 2 -ErrorAction SilentlyContinue
+    if ($resp -match "Ollama is running") { $ollamaRunning = $true }
+} catch {}
+
+$startedOllama = $false
+if (-not $ollamaRunning) {
+    Write-Host "[1/3] Launching Ollama AI..." -ForegroundColor Yellow
+    $ollamaExe = (Get-Command ollama -ErrorAction SilentlyContinue).Source
+    if (-not $ollamaExe -and (Test-Path "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe")) {
+        $ollamaExe = "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe"
+    }
+    if ($ollamaExe) {
+        $ollamaProc = Start-Process -FilePath $ollamaExe -ArgumentList "serve" -WindowStyle Hidden -PassThru
+        $startedOllama = $true
+        for ($i = 0; $i -lt 15; $i++) {
+            Start-Sleep -Milliseconds 500
+            try {
+                $r = Invoke-RestMethod -Uri "http://127.0.0.1:11434" -TimeoutSec 1 -ErrorAction SilentlyContinue
+                if ($r -match "Ollama is running") {
+                    $ollamaRunning = $true
+                    break
+                }
+            } catch {}
+        }
+        if ($ollamaRunning) {
+            Write-Host "  Ollama AI is ready (http://127.0.0.1:11434)" -ForegroundColor Green
+        } else {
+            Write-Host "  Warning: Ollama didn't respond in time. Continuing..." -ForegroundColor DarkYellow
+        }
+    } else {
+        Write-Host "  Warning: Ollama binary not found. Continuing..." -ForegroundColor DarkYellow
+    }
+} else {
+    Write-Host "[1/3] Ollama AI is already running." -ForegroundColor Green
+}
+
 # 2. Start Cloudflare Tunnel
 $logFile = Join-Path $Root "tunnel.log"
 if (Test-Path $logFile) { Remove-Item $logFile -Force -ErrorAction SilentlyContinue }
 
-Write-Host "[1/2] Launching Cloudflare Tunnel..." -ForegroundColor Yellow
+Write-Host "[2/3] Launching Cloudflare Tunnel..." -ForegroundColor Yellow
 $cfProc = Start-Process -FilePath "cloudflared" -ArgumentList "tunnel --url http://127.0.0.1:8765 --logfile `"$logFile`"" -PassThru -NoNewWindow
 
 $tunnelUrl = ""
@@ -51,12 +90,12 @@ if ($tunnelUrl) {
 }
 
 # 3. Start PeakCut Server
-Write-Host "[2/2] Launching PeakCut Web Server..." -ForegroundColor Yellow
+Write-Host "[3/3] Launching PeakCut Web Server..." -ForegroundColor Yellow
 Write-Host "`n  Local Dashboard:  http://127.0.0.1:8765/app" -ForegroundColor Cyan
 if ($tunnelUrl) {
     Write-Host "  Public Address:   $tunnelUrl/app" -ForegroundColor Cyan
 }
-Write-Host "`nPress Ctrl+C to stop both services, or run .\stop.bat / .\stop.ps1`n" -ForegroundColor DarkGray
+Write-Host "`nPress Ctrl+C to stop all services, or run .\stop.bat / .\stop.ps1`n" -ForegroundColor DarkGray
 
 try {
     & py -3.12 -m studio.server
@@ -66,5 +105,8 @@ try {
         Stop-Process -Id $cfProc.Id -Force -ErrorAction SilentlyContinue
     }
     Stop-Process -Name "cloudflared" -Force -ErrorAction SilentlyContinue
+    if ($startedOllama) {
+        Stop-Process -Name "ollama*" -Force -ErrorAction SilentlyContinue
+    }
     Write-Host "All PeakCut services stopped.`n" -ForegroundColor Green
 }
