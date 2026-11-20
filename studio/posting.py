@@ -1,4 +1,5 @@
 """Post queue: decides when each finished clip goes to which account, posts it, and tracks views."""
+import datetime
 import re
 import secrets
 import threading
@@ -90,7 +91,19 @@ def enqueue(job, clip, account_ids, now=False, yt_format=None, ig_format="reel")
                        and (p.get("format") or p.get("yt_format") or ("short" if p.get("platform") == "youtube" else "reel")) == fmt
                        and p["status"] in OPEN + ("posted",) for p in _mine()):
                     continue  # never post the same clip to the same account and format twice
-                due = time.time() if now else _next_slot(aid, c["post_gap_min"], c["daily_cap"])
+
+                # Smart Staggering & Rate-Limit Shield:
+                if now:
+                    recent = [p for p in _mine() if p["account"] == aid and p["status"] in OPEN + ("posted",)]
+                    last_time = max((p.get("posted_at") or p["due_at"] for p in recent), default=0)
+                    spacing = 300 if fmt == "story" else 1200  # 5 min for story, 20 min between reels/shorts
+                    if last_time > time.time() - 30:
+                        due = max(time.time(), last_time + spacing)
+                    else:
+                        due = time.time() + (300 if fmt == "story" else 0)
+                else:
+                    due = _next_slot(aid, c["post_gap_min"], c["daily_cap"]) + (300 if fmt == "story" else 0)
+
                 acc_label = f"{acc['name']} (Story)" if fmt == "story" else (f"{acc['name']} (Short)" if fmt == "short" and acc["platform"] == "youtube" else acc["name"])
                 p = {"id": secrets.token_hex(8), "user": ctx.uid(), "job": job["id"], "clip": clip["id"], "creator": job.get("creator"),
                      "account": aid, "account_name": acc_label, "platform": acc["platform"], "status": "scheduled",
@@ -302,14 +315,38 @@ def _post(p):
         p.update(status="posted", posted_at=time.time(), remote_id=rid, url=url, error=None)
         creators.log(p["creator"], f"Posted to {acc['name']}: {title}")
     except Exception as e:  # noqa: BLE001
-        p["tries"] += 1
-        p["error"] = str(e)[-300:]
-        if p["tries"] < 3 and clip and acc:
-            p.update(status="scheduled", due_at=time.time() + 600)  # try again in 10 minutes
+        err_msg = str(e)
+        is_ig_rate_limit = ("request limit reached" in err_msg.lower() or "(#4)" in err_msg
+                            or "is_transient\":true" in err_msg.lower()
+                            or ("oauth exception" in err_msg.lower() and "4" in err_msg))
+        is_yt_quota = ("uploadlimitexceeded" in err_msg.lower() or "quota exceeded" in err_msg.lower()
+                       or ("quota" in err_msg.lower() and "429" in err_msg))
+
+        if is_ig_rate_limit:
+            # Meta Graph API rolling hourly rate limit: pause for 20m without burning failure count
+            cooldown = 1200
+            p.update(status="scheduled", due_at=time.time() + cooldown,
+                     error="Instagram temporary hourly request limit reached (#4). Cooldown active; will retry in 20m.")
+            creators.log(p["creator"], f"⏳ Rate limit on {p['account_name']}: pausing 20m before retry.")
+        elif is_yt_quota:
+            # YouTube API daily upload quota (resets at 08:00 UTC / 12:00 AM PST)
+            now_utc = datetime.datetime.now(datetime.timezone.utc)
+            reset_utc = now_utc.replace(hour=8, minute=5, second=0, microsecond=0)
+            if reset_utc <= now_utc:
+                reset_utc += datetime.timedelta(days=1)
+            wait_sec = max(3600.0, (reset_utc - now_utc).total_seconds())
+            p.update(status="scheduled", due_at=time.time() + wait_sec,
+                     error="YouTube daily upload quota reached. Auto-rescheduled for quota reset (~1:30 PM IST).")
+            creators.log(p["creator"], f"⏳ YouTube daily quota reached: postponed until quota reset (~1:30 PM IST).")
         else:
-            p["status"] = "failed"
-            creators.log(p["creator"], f"Post failed on {p['account_name']}: {p['error']}")
-            alerts.notify(f"post failed on {p['account_name']} ({p['title']}): {p['error'][:200]}", kind="post")
+            p["tries"] += 1
+            p["error"] = err_msg[-300:]
+            if p["tries"] < 3 and clip and acc:
+                p.update(status="scheduled", due_at=time.time() + 600)  # try again in 10 minutes
+            else:
+                p["status"] = "failed"
+                creators.log(p["creator"], f"Post failed on {p['account_name']}: {p['error']}")
+                alerts.notify(f"post failed on {p['account_name']} ({p['title']}): {p['error'][:200]}", kind="post")
     _save()
     _mirror(p)
 
