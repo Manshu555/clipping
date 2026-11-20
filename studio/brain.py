@@ -57,9 +57,9 @@ Rules:
 - Do not pick intros, sponsor reads, "like and subscribe", or dead air.
 - Skip weak moments. Fewer strong clips beat many weak ones. Return [] if nothing is worth clipping.
 - score: 0-100, how likely a stranger keeps watching. Be honest; most clips are 50-80.
-- hook: at most 5 words, ALL CAPS, bold curiosity-provoking hook shown as big text on the video (e.g. "BRO ACTUALLY DID THIS 💀", "HE LOST HIS MIND", "CANNOT BELIEVE THIS HAPPENED", "WORST TIMING EVER").
+- hook: at most 5 words, ALL CAPS, bold curiosity or meme hook shown as big text on the video (e.g. "BRO ACTUALLY DID THIS 💀", "RAJU MISTRI SIMULATOR 💀", "NOT EVEN 5 MINS IN 😭", "HE LOST HIS MIND", "CANNOT BELIEVE THIS HAPPENED").
 - title: 3 to 4 words describing exactly what is happening in the video with 1 fitting emoji (e.g. "Speed Meets Lucia 💀", "Carry's Insane Reaction 😱", "Lucia Betrays Jason 🔥", "Speed Escapes Police 🚨").
-- description: 1-2 captivating sentences that build drama or curiosity, with an engaging call-to-action (e.g. "Wait for his reaction at the end! 💀 Would you have done this? Drop a comment below 👇"). Tag the featured creator (e.g. @ishowspeed, @carryminati) in the description.
+- description: 1-2 captivating sentences that build drama, humor or curiosity, with an engaging call-to-action (e.g. "Wait for his reaction at the end! 💀 Would you have done this? Drop a comment below 👇", or witty meme comparison like "Jason ❌ Raju Mistri from Vice City ✅💀 Rockstar hired the wrong contractor 😭"). Tag the featured creator (e.g. @ishowspeed, @carryminati) in the description.
 - hashtags: viral hashtags without the # sign. NEVER use generic words like "streamer" or "streamershocked". Always use the creator's real name (e.g. carryminati, speed, carryshocked, speedshocked, mrbeast, liveinsaan). Include game characters like lucia (if Lucia is present or mentioned) and gta6.
 - highlight_words: 3 to 6 single words spoken in the clip that carry the punch.
 - Write hook, title, description, hashtags and highlight_words in English. If the video is in Hindi or Urdu,
@@ -91,7 +91,7 @@ This stream is {game}. Pick the moments that only mean something with that game 
 - The hashtags include {tags}.
 """
 
-_LINKS = re.compile(r"(?i)(?:https?://|www\.)\S+|\b[\w-]+\.(?:com|net|org|io|gg|tv|ly|me|co|xyz|app|link|shop)\b\S*|@\w+")
+_LINKS = re.compile(r"(?i)(?:https?://|www\.)\S+|\b[\w-]+\.(?:com|net|org|io|gg|tv|ly|me|co|xyz|app|link|shop)\b\S*")
 
 
 def _safe(v, limit=200):
@@ -137,7 +137,7 @@ def _tidy(c, s, e, game=None):
     return {
         "start": s, "end": e, "score": max(0, min(100, int(_num(c.get("score"))))),
         "category": cat if cat in CATEGORIES else "other",
-        "hook": roman.to_roman(_text(c.get("hook"), 60)).upper(), "title": roman.to_roman(_text(c.get("title"), 100)),
+        "hook": roman.to_roman(re.sub(r"@\w+", "", _text(c.get("hook"), 60))).upper(), "title": roman.to_roman(_text(c.get("title"), 100)),
         "description": roman.to_roman(_text(c.get("description"), 300)),
         "hashtags": [t for t in tags if t][:15],
         "highlight_words": [roman.to_roman(_text(h, 30)) for h in words][:8],
@@ -708,7 +708,10 @@ def revise_clip(clip, words, request, duration, styles, layouts, title="", uploa
             changes["start"], changes["end"] = round(s, 2), round(e, 2)
     for k, limit in (("hook", 60), ("title", 100), ("description", 300)):
         if k in item and _text(item[k], limit):
-            v = roman.to_roman(_text(item[k], limit))
+            val = _text(item[k], limit)
+            if k == "hook":
+                val = re.sub(r"@\w+", "", val)
+            v = roman.to_roman(val)
             changes[k] = v.upper() if k == "hook" else v
     if item.get("style") in styles:
         changes["style"] = item["style"]

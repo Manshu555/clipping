@@ -207,14 +207,14 @@ def _caption(clip, creator, is_short: bool = True):
     creator_tag_line = f"Streamer: {handle}" if handle and handle.lower() not in desc.lower() and handle.lower() not in title.lower() else ""
 
     tags = []
-    # 1. #lucia (if present/mentioned in the video)
+    # 1. Characters: #lucia, #jason, #jasonduval (if present/mentioned in the video)
     if "lucia" in blob:
         tags.append("lucia")
-    if "jason" in blob:
-        tags.append("jason")
+    if any(k in blob for k in ("jason", "duval")):
+        tags.extend(["jason", "jasonduval"])
 
-    # 2. #gta6 and high-traffic GTA discovery tags (from viral Instagram Reels)
-    tags.extend(["gta6", "gtavi", "grandtheftauto6", "grandtheftautovi"])
+    # 2. #gta6 and high-traffic GTA discovery & meme tags (from viral Instagram Reels)
+    tags.extend(["gta6", "gtavi", "grandtheftauto6", "grandtheftautovi", "gtamemes", "gamingmemes"])
 
     # 3. Creator-specific tags (replace generic #streamershocked with #carryshocked, #speedshocked, etc.)
     c_name = str((creator or {}).get("name") or "").lower()
