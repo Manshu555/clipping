@@ -96,3 +96,43 @@ def static_overlap(start: float, end: float, ranges: list[tuple[float, float]]) 
         if hi > lo:
             total += hi - lo
     return total
+
+
+def inspect_clip_piece(path: str | Path, min_dur: float = 15.0, threshold: float = 0.45) -> dict:
+    """Inspects a clip media file for static ad slates (e.g. Twitch 'commercial break in progress').
+    Identifies leading/trailing static frames so they can be trimmed, or invalidates the clip if
+    it's predominantly an ad break.
+    """
+    pairs = motion_map(path, bucket=1.0)
+    if not pairs:
+        return {'valid': True, 'trim_start': 0.0, 'trim_end': 0.0, 'remaining': 0.0, 'static_ratio': 0.0, 'reason': 'no motion data'}
+    total_sec = float(len(pairs))
+    static_count = sum(1 for t, v in pairs if v < threshold)
+    static_ratio = static_count / total_sec
+    if static_ratio > 0.55:
+        return {'valid': False, 'trim_start': 0.0, 'trim_end': 0.0, 'remaining': 0.0,
+                'static_ratio': static_ratio, 'reason': f'Too much static ({int(static_ratio * 100)}% of clip is an ad/frozen slate)'}
+
+    # Leading static (clip starts during an ad break / frozen screen)
+    lead_trim = 0.0
+    for t, v in pairs:
+        if v < threshold:
+            lead_trim = t + 1.0
+        else:
+            break
+
+    # Trailing static (clip ends into an ad break)
+    trail_trim = 0.0
+    for t, v in reversed(pairs):
+        if v < threshold:
+            trail_trim += 1.0
+        else:
+            break
+
+    rem = total_sec - lead_trim - trail_trim
+    if rem < min_dur:
+        return {'valid': False, 'trim_start': lead_trim, 'trim_end': trail_trim, 'remaining': rem,
+                'static_ratio': static_ratio, 'reason': f'Remaining duration after removing ad slate ({rem:.1f}s) is below minimum {min_dur}s'}
+
+    return {'valid': True, 'trim_start': lead_trim, 'trim_end': trail_trim, 'remaining': rem,
+            'static_ratio': static_ratio, 'reason': 'ok'}

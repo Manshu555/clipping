@@ -710,16 +710,21 @@ class Session:
         for req in [m for m in self.manual if m["end"] <= self.t_done or self.ended]:
             text = " ".join(w["w"] for w in self.words if req["start"] <= w["s"] <= req["end"])
             usage.set_context(self.job["creator"], self.job["title"] or "Live stream")
+            self.manual.remove(req)
+            if len(text.split()) < 4:
+                creators.log(self.job["creator"], "Manual clip skipped: no speech detected in selected range")
+                continue
             try:
                 c = brain.describe(text, self.job["title"], self.job["uploader"], game=self._game(),
                                    timeout=config.LIVE_AI_TIMEOUT)
             except Exception as e:  # noqa: BLE001
-                # Someone asked for this clip by hand. A slow or broken AI costs it its hook, not the clip.
                 self.job["ai"]["last_error"] = str(e)[-200:]
-                c = {"score": 0, "category": "other", "hook": "", "title": self.job["title"],
-                     "description": "", "hashtags": [], "highlight_words": []}
-            self.manual.remove(req)
-            c.update(start=round(req["start"], 2), end=round(min(req["end"], self.samples / SR), 2), score=0)
+                creators.log(self.job["creator"], f"Manual clip failed: AI could not describe moment ({safe.friendly(e, 80)})")
+                continue
+            if not c or not c.get("title") or c.get("score", 0) <= 0:
+                creators.log(self.job["creator"], "Manual clip skipped: AI did not approve moment")
+                continue
+            c.update(start=round(req["start"], 2), end=round(min(req["end"], self.samples / SR), 2))
             if req.get("why"):
                 c["reason"] = req["why"]
             self._add_clip(c)

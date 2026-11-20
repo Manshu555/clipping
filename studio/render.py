@@ -325,7 +325,26 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     # break the filter syntax).
     work = Path(tempfile.mkdtemp(prefix="pk"))
     try:
-        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, face=face)
+        res = _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, face=face)
+        from . import quality
+        out_mp4 = out_dir / f"{name}.mp4"
+        if out_mp4.exists():
+            inspect = quality.inspect_clip_piece(out_mp4, min_dur=12.0)
+            if not inspect["valid"]:
+                for ext in ("mp4", "jpg", "ass"):
+                    (out_dir / f"{name}.{ext}").unlink(missing_ok=True)
+                raise RuntimeError(f"Clip rejected: {inspect['reason']}")
+            if inspect["trim_start"] > 1.5 or inspect["trim_end"] > 1.5:
+                start += inspect["trim_start"]
+                end -= inspect["trim_end"]
+                clip["start"] = start
+                clip["end"] = end
+                ass = build_ass(words if clip.get("captions", True) else [], start, end, clip.get("hook", ""), clip.get("style", "bounce"),
+                                clip.get("highlight_words", []), hook_y, cap_y)
+                for ext in ("mp4", "jpg", "ass"):
+                    (out_dir / f"{name}.{ext}").unlink(missing_ok=True)
+                res = _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, face=face)
+        return res
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

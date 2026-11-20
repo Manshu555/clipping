@@ -127,6 +127,10 @@ def enqueue_all(job, clip, now=True) -> list:
 
 def on_clip_ready(job, clip):
     """Called once when a clip first finishes rendering."""
+    # Strict guard: NEVER auto-upload clips generated without AI, clips with score <= 0, or clips missing a title/hook
+    if clip.get("score", 0) <= 0 or not (clip.get("title") or clip.get("hook")):
+        return
+
     u = job.get("user") or "u_local"
     c = creators.get(job.get("creator"))
 
