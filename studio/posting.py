@@ -199,6 +199,8 @@ def _caption(clip, creator, is_short: bool = True):
         str(clip.get("description") or ""),
         str(clip.get("hook") or ""),
         str(clip.get("reason") or ""),
+        str(clip.get("uploader") or ""),
+        " ".join(str(h) for h in clip.get("hashtags") or []),
         str((creator or {}).get("name") or ""),
         str((creator or {}).get("id") or ""),
     ]).lower()
@@ -280,7 +282,7 @@ def _post(p):
         if not acc:
             raise RuntimeError("That account was disconnected.")
         path = Path(job["dir"]) / "clips" / clip["file"]
-        creator = creators.get(job["creator"]) or dict(creators.DEFAULTS, name="clips")
+        creator = creators.get(job["creator"]) or dict(creators.DEFAULTS, name=job.get("uploader") or "clips")
         is_short = not (acc["platform"] == "youtube" and p.get("yt_format") == "video")
         title, cap = clip.get("title") or clip.get("hook") or "Clip", _caption(clip, creator, is_short=is_short)
         if acc["platform"] == "youtube" and not is_short:
