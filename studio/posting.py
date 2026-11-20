@@ -156,17 +156,74 @@ def on_clip_ready(job, clip):
 
 def _caption(clip, creator):
     import re
-    tags = " ".join("#" + re.sub(r"\W", "", str(h)) for h in clip.get("hashtags", []) if h)
     title = (clip.get("title") or clip.get("hook") or "Clip").strip()
     desc = (clip.get("description") or "").strip()
     footer = creator.get("post_footer", "").strip() if creator else ""
+
+    # Build structured hashtags according to template
+    blob = " ".join([
+        str(clip.get("title") or ""),
+        str(clip.get("description") or ""),
+        str(clip.get("hook") or ""),
+        str(clip.get("reason") or ""),
+        str((creator or {}).get("name") or ""),
+        str((creator or {}).get("id") or ""),
+    ]).lower()
+
+    tags = []
+    # 1. #lucia (if present/mentioned in the video)
+    if "lucia" in blob:
+        tags.append("lucia")
+    if "jason" in blob:
+        tags.append("jason")
+
+    # 2. #gta6
+    tags.append("gta6")
+
+    # 3. Creator-specific tags (replace generic #streamershocked with #carryshocked, #speed, etc.)
+    c_name = str((creator or {}).get("name") or "").lower()
+    cat = str(clip.get("category") or "shock").lower()
+    act = "shocked" if cat in ("shock", "rage", "funny") else cat
+
+    if any(k in c_name or k in blob for k in ("carry", "carryminati", "carryislive")):
+        tags.extend(["carryshocked", "carryminati", "speed"])
+    elif any(k in c_name or k in blob for k in ("speed", "ishowspeed")):
+        tags.extend(["speedshocked", "speed", "ishowspeed", "carryminati"])
+    elif any(k in c_name or k in blob for k in ("insaan", "liveinsaan", "triggeredinsaan")):
+        tags.extend(["liveinsaan", "triggeredinsaan", "carryminati", "speed"])
+    elif "mrbeast" in c_name or "mrbeast" in blob:
+        tags.extend(["mrbeast", "mrbeastshocked", "speed"])
+    else:
+        clean = re.sub(r"\W", "", str((creator or {}).get("name") or ""))
+        if clean:
+            tags.extend([f"{clean.lower()}{act}", clean.lower()])
+
+    # Top creator community tags requested
+    for ct in ("carryminati", "speed", "mrbeast", "liveinsaan"):
+        if ct not in tags:
+            tags.append(ct)
+
+    # 4. Existing clip tags (filtering out any generic 'streamer' tag)
+    for h in clip.get("hashtags", []):
+        clean_h = re.sub(r"\W", "", str(h))
+        if not clean_h or "streamer" in clean_h.lower():
+            continue  # remove generic #streamer / #streamershocked
+        if clean_h.lower() not in [t.lower() for t in tags]:
+            tags.append(clean_h)
+
+    # 5. Core viral tags
+    for vt in ("Shorts", "Viral", "Trending", "FYP", "Gaming"):
+        if vt.lower() not in [t.lower() for t in tags]:
+            tags.append(vt)
+
+    tag_str = " ".join("#" + t for t in tags[:16])
+
     parts = [title]
     if desc and desc.lower() != title.lower():
         parts.append(desc)
     if footer:
         parts.append(footer)
-    if tags:
-        parts.append(tags)
+    parts.append(tag_str)
     return "\n\n".join(parts)
 
 

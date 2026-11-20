@@ -58,9 +58,9 @@ Rules:
 - Skip weak moments. Fewer strong clips beat many weak ones. Return [] if nothing is worth clipping.
 - score: 0-100, how likely a stranger keeps watching. Be honest; most clips are 50-80.
 - hook: at most 5 words, ALL CAPS, bold curiosity-provoking hook shown as big text on the video (e.g. "BRO ACTUALLY DID THIS 💀", "HE LOST HIS MIND", "CANNOT BELIEVE THIS HAPPENED", "WORST TIMING EVER").
-- title: at most 60 characters, highly click-worthy, viral and punchy title with fitting emojis (e.g. "Bro really thought he survived 💀😭", "Speed's wildest GTA 6 reaction 🤯").
+- title: 3 to 4 words describing exactly what is happening in the video with 1 fitting emoji (e.g. "Speed Meets Lucia 💀", "Carry's Insane Reaction 😱", "Lucia Betrays Jason 🔥", "Speed Escapes Police 🚨").
 - description: 1-2 captivating sentences that build drama or curiosity, with an engaging call-to-action (e.g. "Wait for his reaction at the end! 💀 Would you have done this? Drop a comment below 👇").
-- hashtags: 8 to 12 viral, high-reach hashtags without the # sign, combining the streamer name, game name, moment type, and viral reach tags (e.g. CarryMinati, GTA6, IShowSpeed, GamingClips, FunnyMoments, GTA6Fails, Viral, Shorts, Trending, FYP, ExplorePage).
+- hashtags: viral hashtags without the # sign. NEVER use generic words like "streamer" or "streamershocked". Always use the creator's real name (e.g. carryminati, speed, carryshocked, speedshocked, mrbeast, liveinsaan). Include game characters like lucia (if Lucia is present or mentioned) and gta6.
 - highlight_words: 3 to 6 single words spoken in the clip that carry the punch.
 - Write hook, title, description, hashtags and highlight_words in English. If the video is in Hindi or Urdu,
   you may write them the way people type Hindi and Urdu in Roman letters (Hinglish: "yaar ye kya hai"), never
@@ -123,6 +123,7 @@ def _tidy(c, s, e, game=None):
     cat = str(c.get("category", "other")).lower()
     tags = c.get("hashtags") if isinstance(c.get("hashtags"), list) else []
     tags = [re.sub(r"\W", "", str(h))[:30] for h in tags if isinstance(h, (str, int))]
+    tags = [t for t in tags if "streamer" not in t.lower()]
     # The tags of the game are put on every post, whatever the AI wrote: people search for the game.
     for t in games.tags_of(game):
         t = re.sub(r"\W", "", str(t or ""))[:30]     # a tag with a space in it is not a hashtag
