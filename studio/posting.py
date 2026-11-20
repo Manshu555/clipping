@@ -1,4 +1,5 @@
 """Post queue: decides when each finished clip goes to which account, posts it, and tracks views."""
+import re
 import secrets
 import threading
 import time
@@ -154,7 +155,38 @@ def on_clip_ready(job, clip):
                 creators.log(c["id"], f"Queued for {len(made)} account(s): {clip.get('title') or clip.get('hook')}")
 
 
-def _caption(clip, creator):
+CREATOR_HANDLES = {
+    "ishowspeed": "@ishowspeed",
+    "speed": "@ishowspeed",
+    "carryminati": "@carryminati",
+    "carryislive": "@carryminati",
+    "carry": "@carryminati",
+    "mrbeast": "@mrbeast",
+    "liveinsaan": "@triggeredinsaan",
+    "triggeredinsaan": "@triggeredinsaan",
+    "lirik": "@lirik",
+    "jusjacklive": "@jusjacklive",
+}
+
+
+def creator_handle(creator: dict | None, blob: str = "") -> str:
+    blob_lower = f"{blob} {(creator or {}).get('name', '')} {(creator or {}).get('id', '')}".lower()
+    for key, handle in CREATOR_HANDLES.items():
+        if key in blob_lower:
+            return handle
+    if creator:
+        for field in ("handle", "instagram", "social_handle", "user_tag"):
+            val = str(creator.get(field) or "").strip()
+            if val:
+                return val if val.startswith("@") else f"@{val}"
+        raw_name = str(creator.get("name") or "").strip()
+        clean = re.sub(r"\W", "", raw_name)
+        if clean and clean.lower() not in ("clips", "clip", "user", "local"):
+            return f"@{clean}"
+    return ""
+
+
+def _caption(clip, creator, is_short: bool = True):
     import re
     title = (clip.get("title") or clip.get("hook") or "Clip").strip()
     desc = (clip.get("description") or "").strip()
@@ -170,6 +202,10 @@ def _caption(clip, creator):
         str((creator or {}).get("id") or ""),
     ]).lower()
 
+    # Determine creator handle (e.g. @ishowspeed)
+    handle = creator_handle(creator, blob)
+    creator_tag_line = f"Streamer: {handle}" if handle and handle.lower() not in desc.lower() and handle.lower() not in title.lower() else ""
+
     tags = []
     # 1. #lucia (if present/mentioned in the video)
     if "lucia" in blob:
@@ -177,10 +213,10 @@ def _caption(clip, creator):
     if "jason" in blob:
         tags.append("jason")
 
-    # 2. #gta6
-    tags.append("gta6")
+    # 2. #gta6 and high-traffic GTA discovery tags (from viral Instagram Reels)
+    tags.extend(["gta6", "gtavi", "grandtheftauto6", "grandtheftautovi"])
 
-    # 3. Creator-specific tags (replace generic #streamershocked with #carryshocked, #speed, etc.)
+    # 3. Creator-specific tags (replace generic #streamershocked with #carryshocked, #speedshocked, etc.)
     c_name = str((creator or {}).get("name") or "").lower()
     cat = str(clip.get("category") or "shock").lower()
     act = "shocked" if cat in ("shock", "rage", "funny") else cat
@@ -212,7 +248,10 @@ def _caption(clip, creator):
             tags.append(clean_h)
 
     # 5. Core viral tags
-    for vt in ("Shorts", "Viral", "Trending", "FYP", "Gaming"):
+    viral = ["Viral", "Trending", "FYP", "Gaming"]
+    if is_short:
+        viral.insert(0, "Shorts")
+    for vt in viral:
         if vt.lower() not in [t.lower() for t in tags]:
             tags.append(vt)
 
@@ -221,6 +260,8 @@ def _caption(clip, creator):
     parts = [title]
     if desc and desc.lower() != title.lower():
         parts.append(desc)
+    if creator_tag_line:
+        parts.append(creator_tag_line)
     if footer:
         parts.append(footer)
     parts.append(tag_str)
@@ -238,13 +279,14 @@ def _post(p):
             raise RuntimeError("That account was disconnected.")
         path = Path(job["dir"]) / "clips" / clip["file"]
         creator = creators.get(job["creator"]) or dict(creators.DEFAULTS, name="clips")
-        title, cap = clip.get("title") or clip.get("hook") or "Clip", _caption(clip, creator)
-        if acc["platform"] == "youtube" and p.get("yt_format") == "video":
+        is_short = not (acc["platform"] == "youtube" and p.get("yt_format") == "video")
+        title, cap = clip.get("title") or clip.get("hook") or "Clip", _caption(clip, creator, is_short=is_short)
+        if acc["platform"] == "youtube" and not is_short:
             # a normal video: YouTube makes anything vertical and under three minutes a Short, so a 16:9 copy goes up
             rid, url = accounts.youtube_upload(acc, jobs.wide_file(job, clip), title, cap, clip.get("hashtags", []),
                                                creator["privacy"], short=False)
         elif acc["platform"] == "youtube":
-            rid, url = accounts.youtube_upload(acc, path, title, cap + "\n\n#Shorts", clip.get("hashtags", []), creator["privacy"])
+            rid, url = accounts.youtube_upload(acc, path, title, cap, clip.get("hashtags", []), creator["privacy"], short=True)
         elif acc["platform"] == "instagram" and p.get("format") == "story":
             rid, url = accounts.instagram_story_upload(acc, path, job["id"])
         elif acc["platform"] == "instagram":
