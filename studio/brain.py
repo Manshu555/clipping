@@ -57,10 +57,10 @@ Rules:
 - Do not pick intros, sponsor reads, "like and subscribe", or dead air.
 - Skip weak moments. Fewer strong clips beat many weak ones. Return [] if nothing is worth clipping.
 - score: 0-100, how likely a stranger keeps watching. Be honest; most clips are 50-80.
-- hook: at most 5 words, ALL CAPS, shown as big text on the video. Curiosity, but true to what happens.
-- title: at most 60 characters, punchy few words for the post.
-- description: one short sentence.
-- hashtags: 5 to 6 catchy, viral hashtags without the # sign, specific to what happens in this clip, the streamer, and the game (e.g. CarryMinati, GTA6, GamingClips, FunnyMoments, GTA6Fails). Keep them trending and relevant.
+- hook: at most 5 words, ALL CAPS, bold curiosity-provoking hook shown as big text on the video (e.g. "BRO ACTUALLY DID THIS 💀", "HE LOST HIS MIND", "CANNOT BELIEVE THIS HAPPENED", "WORST TIMING EVER").
+- title: at most 60 characters, highly click-worthy, viral and punchy title with fitting emojis (e.g. "Bro really thought he survived 💀😭", "Speed's wildest GTA 6 reaction 🤯").
+- description: 1-2 captivating sentences that build drama or curiosity, with an engaging call-to-action (e.g. "Wait for his reaction at the end! 💀 Would you have done this? Drop a comment below 👇").
+- hashtags: 8 to 12 viral, high-reach hashtags without the # sign, combining the streamer name, game name, moment type, and viral reach tags (e.g. CarryMinati, GTA6, IShowSpeed, GamingClips, FunnyMoments, GTA6Fails, Viral, Shorts, Trending, FYP, ExplorePage).
 - highlight_words: 3 to 6 single words spoken in the clip that carry the punch.
 - Write hook, title, description, hashtags and highlight_words in English. If the video is in Hindi or Urdu,
   you may write them the way people type Hindi and Urdu in Roman letters (Hinglish: "yaar ye kya hai"), never
@@ -128,13 +128,17 @@ def _tidy(c, s, e, game=None):
         t = re.sub(r"\W", "", str(t or ""))[:30]     # a tag with a space in it is not a hashtag
         if t and t.lower() not in {x.lower() for x in tags}:
             tags.append(t)
+    # Ensure high-velocity viral discovery hashtags are included
+    for t in ("Shorts", "Viral", "Trending", "FYP"):
+        if t.lower() not in {x.lower() for x in tags}:
+            tags.append(t)
     words = c.get("highlight_words") if isinstance(c.get("highlight_words"), list) else []
     return {
         "start": s, "end": e, "score": max(0, min(100, int(_num(c.get("score"))))),
         "category": cat if cat in CATEGORIES else "other",
         "hook": roman.to_roman(_text(c.get("hook"), 60)).upper(), "title": roman.to_roman(_text(c.get("title"), 100)),
         "description": roman.to_roman(_text(c.get("description"), 300)),
-        "hashtags": [t for t in tags if t][:8],
+        "hashtags": [t for t in tags if t][:15],
         "highlight_words": [roman.to_roman(_text(h, 30)) for h in words][:8],
         "reason": _text(c.get("reason"), 200),
     }

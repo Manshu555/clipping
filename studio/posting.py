@@ -158,12 +158,15 @@ def _caption(clip, creator):
     import re
     tags = " ".join("#" + re.sub(r"\W", "", str(h)) for h in clip.get("hashtags", []) if h)
     title = (clip.get("title") or clip.get("hook") or "Clip").strip()
+    desc = (clip.get("description") or "").strip()
     footer = creator.get("post_footer", "").strip() if creator else ""
     parts = [title]
-    if tags:
-        parts.append(tags)
+    if desc and desc.lower() != title.lower():
+        parts.append(desc)
     if footer:
         parts.append(footer)
+    if tags:
+        parts.append(tags)
     return "\n\n".join(parts)
 
 
