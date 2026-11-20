@@ -69,7 +69,7 @@ def _next_slot(account_id, gap_min, cap):
 def enqueue(job, clip, account_ids, now=False, yt_format=None, ig_format="reel") -> list:
     """`yt_format` is how a clip goes to YouTube: "short" (vertical, a Short) or "video" (a normal 16:9 video).
     `ig_format` is how a clip goes to Instagram: "reel", "story", or "both"."""
-    c = creators.get(job["creator"]) or creators.DEFAULTS
+    c = creators.get(job.get("creator")) or creators.DEFAULTS
     yt_format = yt_format if yt_format in YT_FORMATS else (c.get("yt_format") if c.get("yt_format") in YT_FORMATS else "short")
     ig_format = ig_format if ig_format in IG_FORMATS else "reel"
     made = []
@@ -91,7 +91,7 @@ def enqueue(job, clip, account_ids, now=False, yt_format=None, ig_format="reel")
                     continue  # never post the same clip to the same account and format twice
                 due = time.time() if now else _next_slot(aid, c["post_gap_min"], c["daily_cap"])
                 acc_label = f"{acc['name']} (Story)" if fmt == "story" else (f"{acc['name']} (Short)" if fmt == "short" and acc["platform"] == "youtube" else acc["name"])
-                p = {"id": secrets.token_hex(8), "user": ctx.uid(), "job": job["id"], "clip": clip["id"], "creator": job["creator"],
+                p = {"id": secrets.token_hex(8), "user": ctx.uid(), "job": job["id"], "clip": clip["id"], "creator": job.get("creator"),
                      "account": aid, "account_name": acc_label, "platform": acc["platform"], "status": "scheduled",
                      "due_at": due, "created": time.time(), "title": clip.get("title") or clip.get("hook") or "Clip",
                      "score": clip.get("score", 0), "tries": 0,
@@ -129,9 +129,6 @@ def on_clip_ready(job, clip):
     """Called once when a clip first finishes rendering."""
     u = job.get("user") or "u_local"
     c = creators.get(job.get("creator"))
-    min_score = c.get("post_min_score", 50) if c else 50
-    if clip.get("score", 0) < min_score:
-        return  # includes hand-made clips (score 0): those wait for you to press Post
 
     with ctx.as_user(u):
         st = accounts.settings()
@@ -144,6 +141,9 @@ def on_clip_ready(job, clip):
                 tag = (c and c.get("id")) or "system"
                 creators.log(tag, f"⚡ Auto Master-Posted ({len(made)} destinations): {clip.get('title') or clip.get('hook')}")
                 return
+        min_score = c.get("post_min_score", 50) if c else 50
+        if clip.get("score", 0) < min_score:
+            return  # includes hand-made clips (score 0): those wait for you to press Post
         if c and c.get("autopost") and c.get("accounts"):
             made = enqueue(job, clip, c["accounts"])
             if made:
