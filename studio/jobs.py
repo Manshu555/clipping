@@ -413,6 +413,12 @@ def render_one(job, clip, words):
                 clip["facecam"] = face
                 clip["layout"] = render.face_layout(clip.get("layout", "blur"), face, keep)
         local = dict(clip, start=clip["start"] - off, end=clip["end"] - off, hook=roman.to_roman(clip.get("hook") or ""))
+        if not local.get("credit"):
+            from . import posting
+            c = creators.get(job.get("creator")) if job.get("creator") else None
+            h = posting.creator_handle(c, str(job.get("uploader") or ""))
+            if h:
+                local["credit"] = h
         if local["end"] <= local["start"] + 0.5:
             raise ValueError(f"Clip timing is invalid ({local['start']:.2f}s to {local['end']:.2f}s): recording was interrupted or ended early.")
         near = _caption_words(job, clip, words, off) if clip.get("captions", True) else []

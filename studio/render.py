@@ -176,7 +176,25 @@ def _hook_events(hook, dur, y, pw=W):
     return ev
 
 
-def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, pw=W, ph=H) -> str:
+def choose_bgm(category: str | None) -> Path | None:
+    """Chooses a fitting royalty-free background music track according to clip mood."""
+    cat = str(category or "").lower()
+    mapping = {
+        "funny": "funny.mp3",
+        "fail": "funny.mp3",
+        "clutch": "hype.mp3",
+        "rage": "hype.mp3",
+        "shock": "suspense.mp3",
+        "take": "suspense.mp3",
+        "story": "viral.mp3",
+        "other": "viral.mp3"
+    }
+    track_name = mapping.get(cat, "viral.mp3")
+    p = Path(__file__).parent / "music" / track_name
+    return p if p.exists() else None
+
+
+def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, pw=W, ph=H, credit="") -> str:
     """`pw` x `ph` is the canvas the text is laid out on; the video it is drawn over is scaled to match."""
     st = STYLES.get(style_name, STYLES["bounce"])
     words = [dict(w, s=w["s"] - CAPTION_LEAD, e=w["e"] - CAPTION_LEAD) for w in words]
@@ -192,12 +210,15 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Cap,{st['font']},{st['size']},&H00{st['base']},&H00{st['base']},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,{st['outline']},0,5,0,0,0,1
 Style: Hook,{HOOK['font']},{HOOK['size']},&H00{HOOK['ink']},&H00{HOOK['ink']},&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1
+Style: Credit,Arial,34,&H40FFFFFF,&H40FFFFFF,&H80000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,3,40,40,70,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     dur = end - start
     ev = _hook_events(_clean(hook), dur, hook_y, pw)
+    if credit:
+        ev.append(f"Dialogue: 0,0:00:00.00,{_ts(dur)},Credit,,40,40,70,,Credit: {credit}")
     f = _Font.get(st["font"])
     inside = [dict(w, w=_clean(w["w"])) for w in words if w["s"] >= start - 0.05 and w["s"] < end]
     inside = sorted((w for w in inside if w["w"]), key=lambda w: w["s"])
@@ -317,15 +338,17 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
         else:               # no webcam found: the whole picture, nothing cut off
             layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, "blur")
     hook_y = _hook_y(layout, hook_y, face)
+    credit = clip.get("credit") or clip.get("creator_handle") or ""
+    bgm = choose_bgm(clip.get("category")) if clip.get("bgm", True) is not False else None
     ass = build_ass(words if clip.get("captions", True) else [], start, end, clip.get("hook", ""), clip.get("style", "bounce"),
-                    clip.get("highlight_words", []), hook_y, cap_y)
+                    clip.get("highlight_words", []), hook_y, cap_y, credit=credit)
     # The clip is made in a short work folder and moved into place afterwards. The caption step of ffmpeg cannot
     # open files whose full path is longer than 260 characters on Windows, which a data folder deep inside other
     # folders easily reaches. Inside the work folder every name is short and relative (a drive colon would also
     # break the filter syntax).
     work = Path(tempfile.mkdtemp(prefix="pk"))
     try:
-        res = _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, face=face)
+        res = _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, face=face, bgm=bgm)
         from . import quality
         out_mp4 = out_dir / f"{name}.mp4"
         if out_mp4.exists():
@@ -340,27 +363,38 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
                 clip["start"] = start
                 clip["end"] = end
                 ass = build_ass(words if clip.get("captions", True) else [], start, end, clip.get("hook", ""), clip.get("style", "bounce"),
-                                clip.get("highlight_words", []), hook_y, cap_y)
+                                clip.get("highlight_words", []), hook_y, cap_y, credit=credit)
                 for ext in ("mp4", "jpg", "ass"):
                     (out_dir / f"{name}.{ext}").unlink(missing_ok=True)
-                res = _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, face=face)
+                res = _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, face=face, bgm=bgm)
         return res
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str, face=None) -> dict:
+def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str, face=None, bgm: Path = None) -> dict:
     global _nvenc_ok, _qsv_ok
+    dur = end - start
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
     (work / "f").mkdir()
     for f in config.FONTS_DIR.glob("*.ttf"):
         shutil.copyfile(f, work / "f" / f.name)
-    fc = _filter(layout, fg_h, face) + f"[v0]ass={name}.ass:fontsdir=f[v]"
-    base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", str(src),
-            "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0",
-            "-af", "asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0,loudnorm=I=-14:TP=-1.5:LRA=11",
-            "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart",
-            "-avoid_negative_ts", "make_zero", "-pix_fmt"]
+    fc_video = _filter(layout, fg_h, face) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+    inputs = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", str(src)]
+    if bgm and Path(bgm).exists():
+        inputs += ["-stream_loop", "-1", "-i", str(bgm)]
+        fade_out_st = max(0.1, dur - 0.8)
+        af_bgm = f"[1:a]volume=0.13,afade=t=in:st=0:d=0.5,afade=t=out:st={fade_out_st:.2f}:d=0.8[bgm];"
+        af_mix = f"[0:a:0][bgm]amix=inputs=2:duration=first:dropout_transition=2,asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0,loudnorm=I=-14:TP=-1.5:LRA=11[a]"
+        fc = fc_video + ";" + af_bgm + af_mix
+        audio_map = ["-map", "[a]"]
+    else:
+        fc = fc_video
+        audio_map = ["-map", "0:a:0", "-af", "asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0,loudnorm=I=-14:TP=-1.5:LRA=11"]
+
+    base = inputs + ["-filter_complex", fc, "-map", "[v]"] + audio_map + [
+        "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart",
+        "-avoid_negative_ts", "make_zero", "-pix_fmt"]
     encoders = []
     if _nvenc_ok is not False:
         encoders.append(("nvenc", ["yuv420p", "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "21"]))

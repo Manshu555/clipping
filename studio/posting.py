@@ -161,6 +161,7 @@ CREATOR_HANDLES = {
     "carryminati": "@carryminati",
     "carryislive": "@carryminati",
     "carry": "@carryminati",
+    "mythpat": "@mythpat",
     "mrbeast": "@mrbeast",
     "liveinsaan": "@triggeredinsaan",
     "triggeredinsaan": "@triggeredinsaan",
@@ -204,7 +205,6 @@ def _caption(clip, creator, is_short: bool = True):
 
     # Determine creator handle (e.g. @ishowspeed)
     handle = creator_handle(creator, blob)
-    creator_tag_line = f"Streamer: {handle}" if handle and handle.lower() not in desc.lower() and handle.lower() not in title.lower() else ""
 
     tags = []
     # 1. Characters: #lucia, #jason, #jasonduval (if present/mentioned in the video)
@@ -214,7 +214,7 @@ def _caption(clip, creator, is_short: bool = True):
         tags.extend(["jason", "jasonduval"])
 
     # 2. #gta6 and high-traffic GTA discovery & meme tags (from viral Instagram Reels)
-    tags.extend(["gta6", "gtavi", "grandtheftauto6", "grandtheftautovi", "gtamemes", "gamingmemes"])
+    tags.extend(["gta6", "gtavi", "vicecity", "gta6map", "grandtheftauto6", "rockstargames", "gtamemes", "gamingmemes", "viralreels"])
 
     # 3. Creator-specific tags (replace generic #streamershocked with #carryshocked, #speedshocked, etc.)
     c_name = str((creator or {}).get("name") or "").lower()
@@ -222,11 +222,13 @@ def _caption(clip, creator, is_short: bool = True):
     act = "shocked" if cat in ("shock", "rage", "funny") else cat
 
     if any(k in c_name or k in blob for k in ("carry", "carryminati", "carryislive")):
-        tags.extend(["carryshocked", "carryminati", "speed"])
+        tags.extend(["carryshocked", "carryminati", "speed", "indianyoutube"])
     elif any(k in c_name or k in blob for k in ("speed", "ishowspeed")):
         tags.extend(["speedshocked", "speed", "ishowspeed", "carryminati"])
     elif any(k in c_name or k in blob for k in ("insaan", "liveinsaan", "triggeredinsaan")):
-        tags.extend(["liveinsaan", "triggeredinsaan", "carryminati", "speed"])
+        tags.extend(["liveinsaan", "triggeredinsaan", "carryminati", "speed", "indianyoutube"])
+    elif any(k in c_name or k in blob for k in ("mythpat", "myth")):
+        tags.extend(["mythpat", "mythpatshocked", "carryminati", "speed", "indianyoutube"])
     elif "mrbeast" in c_name or "mrbeast" in blob:
         tags.extend(["mrbeast", "mrbeastshocked", "speed"])
     else:
@@ -248,7 +250,7 @@ def _caption(clip, creator, is_short: bool = True):
             tags.append(clean_h)
 
     # 5. Core viral tags
-    viral = ["Viral", "Trending", "FYP", "Gaming"]
+    viral = ["Viral", "Trending", "FYP", "Gaming", "FunnyClips"]
     if is_short:
         viral.insert(0, "Shorts")
     for vt in viral:
@@ -260,11 +262,11 @@ def _caption(clip, creator, is_short: bool = True):
     parts = [title]
     if desc and desc.lower() != title.lower():
         parts.append(desc)
-    if creator_tag_line:
-        parts.append(creator_tag_line)
     if footer:
         parts.append(footer)
     parts.append(tag_str)
+    if handle and "credits" not in desc.lower():
+        parts.append(f"Credits: {handle}")
     return "\n\n".join(parts)
 
 
