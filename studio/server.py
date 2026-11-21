@@ -1514,7 +1514,7 @@ def add_posts(body: dict = Body(...)):
 @app.post("/api/posts/{pid}/{action}")
 def post_action(pid: str, action: str):
     try:
-        {"cancel": posting.cancel, "retry": posting.retry}[action](pid)
+        {"cancel": posting.cancel, "retry": posting.retry, "post_now": posting.post_now, "now": posting.post_now}[action](pid)
     except KeyError:
         raise HTTPException(404)
     except ValueError as e:

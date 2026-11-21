@@ -443,24 +443,20 @@ def _ig_token(acc) -> str:
 
 
 def instagram_upload(acc, path: Path, caption: str, job_id: str = ""):
-    """A Reel. On a public site Instagram fetches the clip from a one-hour signed link; on a computer it cannot
-    reach, the file is sent instead (only possible for some app types)."""
+    """A Reel. Direct binary resumable upload sends the video file straight to Meta's servers,
+    which is rock-solid and independent of any external public URL / tunnel flakiness."""
     token = _ig_token(acc)
     auth = {"Authorization": f"Bearer {token}"}
     uid = acc["user_id"]
-    if config.PUBLIC_URL.startswith("https://") and job_id:
-        box = _check(httpx.post(f"{IG_FB}/{uid}/media", data={"media_type": "REELS", "video_url": clip_link(job_id, path.name),
-                                                           "caption": caption[:2200], "share_to_feed": "true"},
-                                headers=auth, timeout=60), "Starting the Instagram post").json()
-    else:
-        box = _check(httpx.post(f"{IG_FB}/{uid}/media", data={"media_type": "REELS", "upload_type": "resumable",
-                                                           "caption": caption[:2200], "share_to_feed": "true"},
-                                headers=auth, timeout=60), "Starting the Instagram upload").json()
-        with path.open("rb") as f:
-            _check(httpx.post(f"{IG_UPLOAD}/{box['id']}", content=f.read(),
-                              headers={"Authorization": f"OAuth {token}", "offset": "0",
-                                       "file_size": str(path.stat().st_size)}, timeout=900),
-                   "Uploading to Instagram (posting from a computer needs a public https address)")
+    box = _check(httpx.post(f"{IG_FB}/{uid}/media", data={"media_type": "REELS", "upload_type": "resumable",
+                                                       "caption": caption[:2200], "share_to_feed": "true"},
+                            headers=auth, timeout=60), "Starting the Instagram upload").json()
+    upload_url = box.get("uri") or f"{IG_UPLOAD}/{box['id']}"
+    with path.open("rb") as f:
+        _check(httpx.post(upload_url, content=f.read(),
+                          headers={"Authorization": f"OAuth {token}", "offset": "0",
+                                   "file_size": str(path.stat().st_size)}, timeout=900),
+               "Uploading to Instagram")
     for _ in range(90):
         st = _check(httpx.get(f"{IG_FB}/{box['id']}", params={"fields": "status_code,status"}, headers=auth, timeout=30),
                     "Checking the Instagram upload").json()
@@ -486,17 +482,14 @@ def instagram_story_upload(acc, path: Path, job_id: str = ""):
     token = _ig_token(acc)
     auth = {"Authorization": f"Bearer {token}"}
     uid = acc["user_id"]
-    if config.PUBLIC_URL.startswith("https://") and job_id:
-        box = _check(httpx.post(f"{IG_FB}/{uid}/media", data={"media_type": "STORIES", "video_url": clip_link(job_id, path.name)},
-                                headers=auth, timeout=60), "Starting the Instagram Story").json()
-    else:
-        box = _check(httpx.post(f"{IG_FB}/{uid}/media", data={"media_type": "STORIES", "upload_type": "resumable"},
-                                headers=auth, timeout=60), "Starting the Instagram Story upload").json()
-        with path.open("rb") as f:
-            _check(httpx.post(f"{IG_UPLOAD}/{box['id']}", content=f.read(),
-                              headers={"Authorization": f"OAuth {token}", "offset": "0",
-                                       "file_size": str(path.stat().st_size)}, timeout=900),
-                   "Uploading to Instagram Story")
+    box = _check(httpx.post(f"{IG_FB}/{uid}/media", data={"media_type": "STORIES", "upload_type": "resumable"},
+                            headers=auth, timeout=60), "Starting the Instagram Story upload").json()
+    upload_url = box.get("uri") or f"{IG_UPLOAD}/{box['id']}"
+    with path.open("rb") as f:
+        _check(httpx.post(upload_url, content=f.read(),
+                          headers={"Authorization": f"OAuth {token}", "offset": "0",
+                                   "file_size": str(path.stat().st_size)}, timeout=900),
+               "Uploading to Instagram Story")
     for _ in range(90):
         st = _check(httpx.get(f"{IG_FB}/{box['id']}", params={"fields": "status_code,status"}, headers=auth, timeout=30),
                     "Checking the Instagram Story upload").json()

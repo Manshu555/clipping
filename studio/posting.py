@@ -174,6 +174,9 @@ CREATOR_HANDLES = {
     "carryminati": "@carryminati",
     "carryislive": "@carryminati",
     "carry": "@carryminati",
+    "technogamerz": "@techno_gamerz",
+    "techno": "@techno_gamerz",
+    "ujjwalgamer": "@ujjwalgamer",
     "mythpat": "@mythpat",
     "mrbeast": "@mrbeast",
     "liveinsaan": "@triggeredinsaan",
@@ -238,6 +241,8 @@ def _caption(clip, creator, is_short: bool = True):
 
     if any(k in c_name or k in blob for k in ("carry", "carryminati", "carryislive")):
         tags.extend(["carryshocked", "carryminati", "speed", "indianyoutube"])
+    elif any(k in c_name or k in blob for k in ("techno", "technogamerz", "ujjwal", "ujjwalgamer")):
+        tags.extend(["technogamerz", "ujjwalgamer", "technoshocked", "carryminati", "speed", "indianyoutube"])
     elif any(k in c_name or k in blob for k in ("speed", "ishowspeed")):
         tags.extend(["speedshocked", "speed", "ishowspeed", "carryminati"])
     elif any(k in c_name or k in blob for k in ("insaan", "liveinsaan", "triggeredinsaan")):
@@ -364,7 +369,14 @@ def _run():
                         if p["status"] != "scheduled":
                             continue
                         p["status"] = "posting"
-                    _post(p)
+                    try:
+                        _post(p)
+                    finally:
+                        if p.get("status") == "posting":
+                            p["status"] = "failed"
+                            p["error"] = p.get("error") or "Posting aborted unexpectedly"
+                            _save()
+                            _mirror(p)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -413,6 +425,16 @@ def retry(pid):
         if not p or p["status"] not in ("failed", "cancelled"):
             raise ValueError("Only failed or cancelled posts can be retried.")
         p.update(status="scheduled", due_at=time.time(), tries=0, error=None)
+        _save()
+    _mirror(p)
+
+
+def post_now(pid):
+    with _lock:
+        p = next((p for p in _mine() if p["id"] == pid), None)
+        if not p:
+            raise ValueError("Post not found.")
+        p.update(status="scheduled", due_at=time.time() - 1, tries=0, error=None)
         _save()
     _mirror(p)
 

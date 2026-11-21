@@ -1680,9 +1680,10 @@ function scoreCls(s) { return s >= 80 ? "s-hi" : s >= 60 ? "s-mid" : ""; }
 function postPills(c) {
   return Object.values(c.posts || {}).filter(p => p.status !== "cancelled").map(p => {
     const cls = p.status === "posted" ? "ok" : p.status === "failed" ? "bad" : "warn";
-    const kind = p.platform === "youtube" ? (p.yt_format === "video" ? " (video)" : " (Short)") : "";
-    const txt = `${esc(p.account_name)}${kind} · ${p.status === "scheduled" ? clock(p.due_at) : p.status}`;
-    return p.url ? `<a class="pill ${cls}" href="${esc(p.url)}" target="_blank" rel="noopener">${txt}</a>` : `<span class="pill ${cls}" title="${esc(p.error || "")}">${txt}</span>`;
+    const acc = esc(p.account_name || "");
+    const kind = p.platform === "youtube" && !acc.includes("(Short)") && !acc.includes("(video)") ? (p.yt_format === "video" ? " (video)" : " (Short)") : "";
+    const txt = `${acc}${kind} · ${p.status === "scheduled" ? clock(p.due_at) : p.status}`;
+    return p.url ? `<a class="pill ${cls}" href="${esc(p.url)}" target="_blank" rel="noopener">${txt}</a>` : `<span class="pill ${cls}" title="${esc(p.error || (p.status === 'scheduled' ? 'Scheduled anti-burst queue' : ''))}">${txt}</span>`;
   }).join("");
 }
 function clipHtml(j, c) {
@@ -1962,7 +1963,7 @@ function drawOverview() {
         <button class="btn ${o.paused ? "primary" : ""}" data-act="pause">${ic(o.paused ? "play" : "pause")}${o.paused ? "Resume posting" : "Pause all posting"}</button></div>
       ${o.posts.length ? `<div class="scroll"><table class="stack"><tr><th>When</th><th>Clip</th><th>Creator</th><th>Account</th><th class="num">Views</th><th></th></tr>
       ${o.posts.map(p => `<tr><td data-l="Status">${pst(p)}</td><td data-l="Clip" class="c-main">${p.url ? `<a class="lnk" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a>` : esc(p.title)}${p.error ? `<div class="err" style="margin:2px 0 0">${esc(p.error)}</div>` : ""}</td><td data-l="Creator">${esc(p.creator_name || "None")}</td><td data-l="Account">${esc(p.account_name)}</td><td data-l="Views" class="num">${p.views ?? "–"}</td>
-        <td class="c-act" style="text-align:right">${p.status === "scheduled" ? `<button class="btn sm" data-act="pcancel" data-id="${p.id}">Cancel</button>` : p.status === "failed" ? `<button class="btn sm" data-act="pretry" data-id="${p.id}">Retry</button>` : ""}</td></tr>`).join("")}</table></div>`
+        <td class="c-act" style="text-align:right">${p.status === "scheduled" ? `<button class="btn sm brand" data-act="pnow" data-id="${p.id}" style="margin-right:4px;">Post Now</button><button class="btn sm" data-act="pcancel" data-id="${p.id}">Cancel</button>` : p.status === "failed" ? `<button class="btn sm" data-act="pretry" data-id="${p.id}">Retry</button>` : ""}</td></tr>`).join("")}</table></div>`
       : `<p class="help">Nothing queued or posted yet.</p>`}</div>`);
 }
 
@@ -2494,7 +2495,11 @@ document.addEventListener("click", async e => {
       toast(checked ? "Auto Master-Post enabled: new clips will be uploaded directly" : "Auto Master-Post disabled", "ok");
       return;
     }
-    if (a === "pcancel" || a === "pretry") { await api(`/api/posts/${d.id}/${a === "pcancel" ? "cancel" : "retry"}`, {method:"POST"}); return loadOverview(); }
+    if (a === "pnow" || a === "pcancel" || a === "pretry") {
+      await api(`/api/posts/${d.id}/${a === "pnow" ? "post_now" : (a === "pcancel" ? "cancel" : "retry")}`, {method:"POST"});
+      toast(a === "pnow" ? "Publishing post now…" : (a === "pcancel" ? "Post cancelled" : "Retrying post…"), "ok");
+      return loadOverview();
+    }
     if (a === "ssave") { await saveSettings(); toast("Saved", "ok"); return drawSettings(); }
     if (a === "plansave") {
       const p = {}; $$("#sform [data-plan]").forEach(i => { (p[i.dataset.plan] ??= {})[i.dataset.f] = Number(i.value); });
