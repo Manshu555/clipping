@@ -104,6 +104,7 @@ def _ydl(opts):
     # longer and more often: up to 20 tries, 0.1 s growing to 2 s apart.
     return yt_dlp.YoutubeDL({"noplaylist": True, "quiet": True, "no_warnings": True, "logger": _Quiet(),
                              "extract_flat": "in_playlist", "playlistend": 1, "socket_timeout": 20,
+                             "remote_components": ["ejs:github"],
                              "concurrent_fragment_downloads": 4, "file_access_retries": 20,
                              "retry_sleep_functions": {"file_access": lambda n: min(2.0, 0.1 * 2 ** n)}, **opts})
 

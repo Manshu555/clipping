@@ -539,7 +539,7 @@ def _english_part(job, clip):
 
 # Above this, fetch only the pieces that become clips instead of the whole video. A connection that drops long
 # downloads of small ranges (they hang) can set it higher: the whole video is then fetched once, which resumes.
-LONG_VIDEO = float(config.env("PEAKCUT_LONG_VIDEO_MINUTES", "40") or 40) * 60
+LONG_VIDEO = float(config.env("PEAKCUT_LONG_VIDEO_MINUTES", "240") or 240) * 60
 PAD = 8                # seconds kept either side of a fetched piece, so clips can be re-trimmed
 
 
