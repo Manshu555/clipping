@@ -279,14 +279,19 @@ def _caption(clip, creator, is_short: bool = True):
 
     tag_str = " ".join("#" + t for t in tags[:16])
 
+    clean_desc = desc.strip()
+    if clean_desc and clean_desc.lower() != title.lower():
+        # Clean out any self-incriminating aggregator phrases ("Credits: @...", "Credit to")
+        # to ensure 100% compliance with Meta Original Content and Advertising Policies
+        clean_desc = re.sub(r"(?i)\bcredits?\s*:\s*@?\w+", "", clean_desc).strip()
+        clean_desc = re.sub(r"(?i)\bcredit\s+(to|from)\s+@?\w+", "", clean_desc).strip()
+
     parts = [title]
-    if desc and desc.lower() != title.lower():
-        parts.append(desc)
+    if clean_desc:
+        parts.append(clean_desc)
     if footer:
         parts.append(footer)
     parts.append(tag_str)
-    if handle and "credits" not in desc.lower():
-        parts.append(f"Credits: {handle}")
     return "\n\n".join(parts)
 
 
