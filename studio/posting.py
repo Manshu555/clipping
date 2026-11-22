@@ -96,13 +96,13 @@ def enqueue(job, clip, account_ids, now=False, yt_format=None, ig_format="reel")
                 if now:
                     recent = [p for p in _mine() if p["account"] == aid and p["status"] in OPEN + ("posted",)]
                     last_time = max((p.get("posted_at") or p["due_at"] for p in recent), default=0)
-                    spacing = 300 if fmt == "story" else 1200  # 5 min for story, 20 min between reels/shorts
+                    spacing = 300 if fmt == "story" else 600  # 5 min for story, 10 min between reels/shorts
                     if last_time > time.time() - 30:
                         due = max(time.time(), last_time + spacing)
                     else:
                         due = time.time() + (300 if fmt == "story" else 0)
                 else:
-                    due = _next_slot(aid, c["post_gap_min"], c["daily_cap"]) + (300 if fmt == "story" else 0)
+                    due = _next_slot(aid, c.get("post_gap_min") or 10, c.get("daily_cap") or 20) + (300 if fmt == "story" else 0)
 
                 acc_label = f"{acc['name']} (Story)" if fmt == "story" else (f"{acc['name']} (Short)" if fmt == "short" and acc["platform"] == "youtube" else acc["name"])
                 p = {"id": secrets.token_hex(8), "user": ctx.uid(), "job": job["id"], "clip": clip["id"], "creator": job.get("creator"),

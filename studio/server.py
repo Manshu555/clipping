@@ -1243,8 +1243,14 @@ def go_live(cid: str, body: dict = Body(default={})):
         raise HTTPException(404, "No such creator")
     # the stream the user is watching, else where they are live right now, else the channel chosen in Setup
     on_air = [p["channel"] for k, p in (c.get("profiles") or {}).items() if p.get("live") and c["channels"].get(k) == p.get("channel")]
-    asked = str((body or {}).get("channel") or "")
-    url = asked if asked in c["channels"].values() else c["channel"] if c["channel"] in on_air or not on_air else on_air[0]
+    asked = str((body or {}).get("channel") or "").strip()
+    if asked and media.site_allowed(asked):
+        url = asked
+        plat = "youtube" if media.is_youtube(asked) else "twitch" if "twitch.tv" in asked else "kick" if "kick.com" in asked else "custom"
+        c.setdefault("channels", {})[plat] = asked
+        creators.update(cid, {"channels": c["channels"]})
+    else:
+        url = c.get("channel") if c.get("channel") in on_air or not on_air else (on_air[0] if on_air else "")
     try:
         return jobs.public(live.start_session(c, url))
     except ValueError as e:

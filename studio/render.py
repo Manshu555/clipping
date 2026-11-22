@@ -419,7 +419,14 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
     run(["ffmpeg", "-y", "-v", "error", "-ss", f"{cover_t:.2f}", "-i", f"{name}.mp4", "-frames:v", "1",
          "-q:v", "3", f"{name}.jpg"], cwd=work)
     for ext in ("mp4", "jpg", "ass"):
-        shutil.move(str(work / f"{name}.{ext}"), str(out_dir / f"{name}.{ext}"))
+        src_file = work / f"{name}.{ext}"
+        dst_file = out_dir / f"{name}.{ext}"
+        if dst_file.exists():
+            try:
+                dst_file.unlink()
+            except Exception:
+                pass
+        shutil.move(str(src_file), str(dst_file))
     return {"file": f"{name}.mp4", "cover": f"{name}.jpg", "layout": layout}
 
 
